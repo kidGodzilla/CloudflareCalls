@@ -1,8 +1,8 @@
-# CloudflareCallsLibrary.js
+# CloudflareCalls.js
 
-A reference implementation of Cloudflare Calls, including a client-side library [(CloudflareCalls class)](/docs/CloudflareCalls.html), and a minimal Express [signaling server](/docs/api).
+A reference implementation of Cloudflare Calls, including a client-side library [(CloudflareCalls class)](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html), and a minimal Express [signaling server](https://cloudflarecalls.jamesfuthey.com/docs/api).
 
-[Library Docs](/docs/) | [API (server) Docs](/docs/api) | [Demo](/)
+[Library Docs](https://cloudflarecalls.jamesfuthey.com/docs/) | [API (server) Docs](https://cloudflarecalls.jamesfuthey.com/docs/api) | [GitHub](https://github.com/kidGodzilla/CloudflareCalls) | [Demo](https://cloudflarecalls.jamesfuthey.com/)
 
 # Getting Started
 
@@ -20,7 +20,7 @@ Everything you need to run the demo app is included in the example server, with 
 
 ## Demo
 
-Try the [demo](/) to see how the implemented methods function in a real application.
+Try the [demo](https://cloudflarecalls.jamesfuthey.com/) to see how the implemented methods function in a real application.
 
 # Usage 
 
@@ -41,10 +41,10 @@ Additionally, Cloudflare recommends the inclusion of the [webrtc-adapter](https:
 
 ## Establishing a call between participants
 
-2. [Get media devices](/docs/CloudflareCalls.html#getAvailableDevices)
-3. [Preview Media (optional)](/docs/CloudflareCalls.html#previewMedia)
-4. Handle [onParticipantJoined](/docs/CloudflareCalls.html#onParticipantJoined), [onRemoteTrack](/docs/CloudflareCalls.html#onRemoteTrack), [onDataMessage](/docs/CloudflareCalls.html#onDataMessage)
-5. [Create a room](/docs/CloudflareCalls.html#createRoom) (only one participant needs to do this, returns a GUID)
-6. [Join a room](/docs/CloudflareCalls.html#joinRoom) (by GUID)
+2. [Get media devices](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#getAvailableDevices)
+3. [Preview Media (optional)](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#previewMedia)
+4. Handle [onParticipantJoined](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#onParticipantJoined), [onRemoteTrack](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#onRemoteTrack), [onDataMessage](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#onDataMessage)
+5. [Create a room](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#createRoom) (only one participant needs to do this, returns a GUID)
+6. [Join a room](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#joinRoom) (by GUID)
 
 You can see an example of this flow in the example included at `public/index.html`.

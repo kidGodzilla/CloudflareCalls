@@ -7,19 +7,18 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "apidocs": "apidoc -i ./ -e \"(node_modules|public)\" -o public/docs/api",
     "docs": "jsdoc -c jsdoc.json",
+    "build": "npm run docs && mkdir -p public/docs/api && npm run apidocs",
     "start": "node ."
   },
   "author": "James Futhey",
   "license": "MIT",
   "dependencies": {
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "node-fetch": "^2.6.7",
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
     "apidoc": "^1.2.0",
     "docdash": "^2.0.2",
-    "jsdoc": "^4.0.4"
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsdoc": "^4.0.4",
+    "node-fetch": "^2.6.7",
+    "ws": "^8.18.0"
   }
 }

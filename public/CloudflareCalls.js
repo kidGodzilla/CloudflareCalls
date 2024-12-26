@@ -1,5 +1,5 @@
 /**
- * CloudflareCallsLibrary.js
+ * CloudflareCalls.js
  *
  * High-level library for Cloudflare Calls using SFU,
  * now leveraging WebSocket for data message publish/subscribe flow.
@@ -15,9 +15,9 @@ class CloudflareCalls {
      * @param {string} config.backendUrl - The backend server URL.
      * @param {string} config.websocketUrl - The WebSocket server URL.
      */
-    constructor(config) {
-        this.backendUrl = config.backendUrl;
-        this.websocketUrl = config.websocketUrl;
+    constructor(config = {}) {
+        this.backendUrl = config.backendUrl || '';
+        this.websocketUrl = config.websocketUrl || '';
 
         this.roomId = null;
         this.sessionId = null;

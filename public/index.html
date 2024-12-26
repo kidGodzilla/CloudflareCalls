@@ -46,7 +46,10 @@
     </style>
 </head>
 <body>
-<h1>Cloudflare Calls SFU Demo</h1>
+<h1>
+    Cloudflare Calls SFU Demo
+    (<a href="/docs/">Docs</a> | <a href="https://github.com/kidGodzilla/CloudflareCalls">GitHub</a>)
+</h1>
 
 <div id="videos">
     <!-- Local preview video -->
@@ -81,10 +84,7 @@
 <script type="module">
     import CloudflareCalls from './CloudflareCalls.js';
 
-    const calls = new CloudflareCalls({
-        backendUrl: 'http://localhost:5001',
-        websocketUrl: 'ws://localhost:5001'
-    });
+    const calls = new CloudflareCalls();
     window.calls = calls; // for debugging
 
     const localVideo = document.getElementById('localVideo');

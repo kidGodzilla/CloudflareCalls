@@ -3,7 +3,7 @@
         "allowUnknownTags": true
     },
     "source": {
-        "include": ["index.js", "public/CloudflareCallsLibrary.js"],
+        "include": ["index.js", "public/CloudflareCalls.js"],
         "includePattern": ".js$",
         "excludePattern": "(node_modules|docs)"
     },
