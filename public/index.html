@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=3,minimum-scale=1,user-scalable=yes,minimal-ui,viewport-fit=cover">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+
+    <title>Cloudflare Calls SFU Demo</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        #videos {
+            display: flex;
+            flex-wrap: wrap;
+        }
+        video, audio {
+            width: 300px;
+            height: 225px;
+            background-color: black;
+            margin: 5px;
+            border: 1px solid #ccc;
+        }
+        #controls {
+            margin-top: 10px;
+        }
+        #controls button, #controls select {
+            margin-right: 5px;
+            padding: 10px 15px;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }
+        #dataChannelMessages {
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+<h1>Cloudflare Calls SFU Demo</h1>
+
+<div id="videos">
+    <!-- Local preview video -->
+    <video id="localVideo" autoplay muted playsinline></video>
+</div>
+
+<div id="controls">
+    <button id="createRoom">Create Room</button>
+    <button id="joinRoom">Join Room</button>
+    <button id="leaveRoom">Leave Room</button>
+    <button id="toggleVideo">Disable Video</button>
+    <button id="toggleAudio">Disable Audio</button>
+    <button id="shareScreen">Share Screen</button>
+
+    <select id="audioInputSelect"></select>
+    <select id="videoInputSelect"></select>
+    <select id="audioOutputSelect"></select>
+
+    <button id="previewMedia">Preview Media</button>
+
+    <button id="sendData">Send Data</button>
+</div>
+
+<div id="dataChannelMessages">
+    <h3>Data Channel Messages</h3>
+</div>
+
+<!-- Adapter.js for broader WebRTC compatibility -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/webrtc-adapter/8.1.2/adapter.min.js"></script>
+
+<!-- IMPORTANT: adjust the path to your refactored CloudflareCalls library -->
+<script type="module">
+    import CloudflareCalls from './CloudflareCalls.js';
+
+    const calls = new CloudflareCalls({
+        backendUrl: 'http://localhost:5001',
+        websocketUrl: 'ws://localhost:5001'
+    });
+    window.calls = calls; // for debugging
+
+    const localVideo = document.getElementById('localVideo');
+    const videosContainer = document.getElementById('videos');
+    const createRoomBtn = document.getElementById('createRoom');
+    const joinRoomBtn = document.getElementById('joinRoom');
+    const leaveRoomBtn = document.getElementById('leaveRoom');
+    const toggleVideoBtn = document.getElementById('toggleVideo');
+    const toggleAudioBtn = document.getElementById('toggleAudio');
+    const shareScreenBtn = document.getElementById('shareScreen');
+    const dataChannelMessages = document.getElementById('dataChannelMessages');
+    const sendDataBtn = document.getElementById('sendData');
+
+    const audioInputSelect = document.getElementById('audioInputSelect');
+    const videoInputSelect = document.getElementById('videoInputSelect');
+    const audioOutputSelect = document.getElementById('audioOutputSelect');
+    const previewMediaBtn = document.getElementById('previewMedia');
+
+    // ===== 1) Populate device lists =====
+    async function populateDeviceLists() {
+        const devices = await calls.getAvailableDevices();
+        // Populate audio/video input & audio output selects
+        devices.audioInput.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `Microphone ${audioInputSelect.length + 1}`;
+            audioInputSelect.appendChild(option);
+        });
+        devices.videoInput.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `Camera ${videoInputSelect.length + 1}`;
+            videoInputSelect.appendChild(option);
+        });
+        devices.audioOutput.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `Speaker ${audioOutputSelect.length + 1}`;
+            audioOutputSelect.appendChild(option);
+        });
+    }
+    populateDeviceLists();
+
+    // ===== 2) Listen for device selection changes =====
+    audioInputSelect.addEventListener('change', async () => {
+        await calls.selectAudioInputDevice(audioInputSelect.value);
+    });
+    videoInputSelect.addEventListener('change', async () => {
+        await calls.selectVideoInputDevice(videoInputSelect.value);
+    });
+    audioOutputSelect.addEventListener('change', async () => {
+        await calls.selectAudioOutputDevice(audioOutputSelect.value);
+    });
+
+    // ===== 3) Preview Media =====
+    previewMediaBtn.addEventListener('click', async () => {
+        try {
+            const previewStream = await calls.previewMedia({
+                audioDeviceId: audioInputSelect.value,
+                videoDeviceId: videoInputSelect.value
+            }, localVideo);
+            console.log('Preview successful.');
+        } catch (err) {
+            alert('Error previewing media: ' + err.message);
+        }
+    });
+
+    // ===== 4) Remote Track Handling =====
+    calls.onRemoteTrack(track => {
+        console.log('New remote track kind:', track.kind);
+        if (track.kind === 'video') {
+            const newStream = new MediaStream([track]);
+            const vidEl = document.createElement('video');
+            vidEl.autoplay = true;
+            vidEl.playsInline = true;
+            vidEl.width = 300;
+            vidEl.height = 225;
+            vidEl.setAttribute('data-session-id', track.sessionId);
+            vidEl.setAttribute('data-track-kind', 'video');
+            videosContainer.appendChild(vidEl);
+            vidEl.srcObject = newStream;
+        } else if (track.kind === 'audio') {
+            const newStream = new MediaStream([track]);
+            const audioEl = document.createElement('audio');
+            audioEl.autoplay = true;
+            audioEl.controls = true;
+            audioEl.setAttribute('data-session-id', track.sessionId);
+            audioEl.setAttribute('data-track-kind', 'audio');
+            videosContainer.appendChild(audioEl);
+            audioEl.srcObject = newStream;
+        }
+    });
+
+    // ===== 5) Data Channel Callbacks =====
+    calls.onDataMessage((msg) => {
+        console.log('onDataMessage', msg);
+        const p = document.createElement('p');
+        p.textContent = 'Data Channel Received: ' + JSON.stringify(msg);
+        dataChannelMessages.appendChild(p);
+    });
+
+    // calls.onDataMessageToParticipant((msg) => {
+    //     // If your library’s logic calls this for per-participant messages:
+    //     console.log('onDataMessageToParticipant', msg);
+    //     if (msg.to === calls.userId) {
+    //         const p = document.createElement('p');
+    //         p.textContent = 'Private Message Received: ' + JSON.stringify(msg);
+    //         dataChannelMessages.appendChild(p);
+    //     }
+    // });
+
+    // ===== 6) Participants =====
+    calls.onParticipantJoined(async (participant) => {
+        console.log('Participant joined:', participant);
+        // We can auto-subscribe to that participant’s “chat” data channel here:
+        try {
+            await calls.subscribeDataChannel(participant.sessionId, 'chat');
+            console.log('Subscribed to participant’s "chat" channel:', participant.sessionId);
+        } catch (err) {
+            console.warn('Error subscribing to participant chat channel:', err);
+        }
+    });
+
+    calls.onParticipantLeft((sessionId) => {
+        console.log('Participant left:', sessionId);
+        // Optionally remove any associated UI
+    });
+
+    // ===== 7) Button handlers =====
+    createRoomBtn.addEventListener('click', async () => {
+        const roomId = await calls.createRoom();
+        alert('Created room with ID: ' + roomId);
+    });
+
+    joinRoomBtn.addEventListener('click', async () => {
+        const roomId = prompt('Enter Room ID to join:');
+        if (!roomId) return;
+
+        const username = prompt('Enter your username:');
+        const avatar = prompt('Enter your avatar URL:') || '';
+
+        try {
+            await calls.joinRoom(roomId, { username, avatar });
+            console.log('Joined room:', roomId);
+
+            // (Optional) publish a "chat" data channel for others to subscribe
+            // await calls.publishDataChannel('chat');
+            console.log('Published local "chat" data channel.');
+        } catch (err) {
+            console.error('Error joining room:', err);
+            alert('Error joining room: ' + err.message);
+        }
+    });
+
+    leaveRoomBtn.addEventListener('click', async () => {
+        await calls.leaveRoom();
+        alert('Left the room.');
+
+        // Clean up remote media
+        document.querySelectorAll('#videos video:not(#localVideo), #videos audio')
+            .forEach(media => media.remove());
+    });
+
+    toggleVideoBtn.addEventListener('click', () => {
+        const isEnabled = localVideo.srcObject?.getVideoTracks()[0]?.enabled ?? true;
+        calls.toggleMedia({ video: !isEnabled, audio: false });
+        toggleVideoBtn.textContent = isEnabled ? 'Enable Video' : 'Disable Video';
+    });
+
+    toggleAudioBtn.addEventListener('click', () => {
+        const isEnabled = localVideo.srcObject?.getAudioTracks()[0]?.enabled ?? true;
+        calls.toggleMedia({ audio: !isEnabled, video: false });
+        toggleAudioBtn.textContent = isEnabled ? 'Enable Audio' : 'Disable Audio';
+    });
+
+    shareScreenBtn.addEventListener('click', async () => {
+        try {
+            await calls.shareScreen();
+            alert('Screen sharing started.');
+        } catch (err) {
+            alert('Error sharing screen: ' + err.message);
+        }
+    });
+
+    // ===== 8) Sending Data =====
+    sendDataBtn.addEventListener('click', async () => {
+        const content = prompt('Enter message:');
+        if (!content) return;
+
+        // We'll send everything on our "chat" channel
+        // Make sure we've published it already (see joinRoom code above).
+        // Then we can do:
+        const message = { content, fromUser: calls.userId };
+
+        calls.sendDataToAll(message);
+    });
+</script>
+</body>
+</html>

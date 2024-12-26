@@ -1,0 +1,14 @@
+{
+  "name": "Cloudflare Calls Backend Server (Express)",
+  "version": "0.1.4",
+  "description": "A reference implementation of a backend (in Express) for CloudflareCalls.js",
+  "title": "Backend Documentation",
+  "url" : "https://github.com/kidGodzilla/CloudflareCalls",
+  "header": {
+    "title": "Backend Documentation",
+    "filename": "header.md"
+  },
+  "template": {
+    "forceLanguage": "en"
+  }
+}
