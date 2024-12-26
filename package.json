@@ -2,9 +2,11 @@
   "name": "cloudflare-calls",
   "version": "0.1.4",
   "description": "A Reference implementation for Cloudflare Calls",
-  "main": "index.js",
+  "module": "public/CloudflareCalls.js",
+  "browser": "public/CloudflareCalls.min.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "rollup": "rollup public/CloudflareCalls.js --file public/CloudflareCalls.min.js --format umd --name \"CloudflareCalls\"",
     "apidocs": "apidoc -i ./ -e \"(node_modules|public)\" -o public/docs/api",
     "docs": "jsdoc -c jsdoc.json",
     "build": "npm run docs && mkdir -p public/docs/api && npm run apidocs",
