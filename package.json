@@ -18,6 +18,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsdoc": "^4.0.4",
+    "jsonwebtoken": "^9.0.2",
     "node-fetch": "^2.6.7",
     "ws": "^8.18.0"
   }

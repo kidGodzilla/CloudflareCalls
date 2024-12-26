@@ -10,6 +10,7 @@ require('dotenv').config();
 const express = require('express');
 const fetch = require('node-fetch');
 const path = require('path');
+const jwt = require('jsonwebtoken');
 const WebSocket = require('ws');
 const crypto = require('crypto');
 const http = require('http');
@@ -18,10 +19,44 @@ const app = express();
 app.use(express.json());
 app.use(express.static('public'));
 
+const AUTH_REQUIRED = true; // You can turn off auth for your demo if you want
 const port = process.env.PORT || 5000;
 const CLOUDFLARE_APP_ID = process.env.CLOUDFLARE_APP_ID;
 const CLOUDFLARE_APP_SECRET = process.env.CLOUDFLARE_APP_SECRET;
-const CLOUDFLARE_BASE_PATH = `https://rtc.live.cloudflare.com/v1/apps/${CLOUDFLARE_APP_ID}`;
+const SECRET_KEY = process.env.JWT_SECRET || 'thisisjustademokey';
+const CLOUDFLARE_CALLS_BASE_URL = process.env.CLOUDFLARE_APPS_URL || 'https://rtc.live.cloudflare.com/v1/apps';
+const CLOUDFLARE_BASE_PATH = `${CLOUDFLARE_CALLS_BASE_URL}/${CLOUDFLARE_APP_ID}`;
+
+// Middleware to verify token from the Authorization header
+function verifyToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    if (!AUTH_REQUIRED) return next();
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized: No token provided' });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    try {
+        const decoded = jwt.verify(token, SECRET_KEY);
+        req.user = decoded; // Attach decoded token data to the request object
+        next();
+    } catch (err) {
+        return res.status(403).json({ error: 'Forbidden: Invalid token' });
+    }
+}
+
+// Example token generation endpoint
+// Has no usefulness in production, just facilitates the demo
+app.post('/auth/token', (req, res) => {
+    const { username } = req.body;
+
+    // Generate a token with arbitrary JSON payload
+    const token = jwt.sign({ username, role: 'demo' }, SECRET_KEY, { expiresIn: '8h' });
+
+    res.json({ token });
+});
 
 /**
  * In-memory storage for rooms and participants.
@@ -51,7 +86,7 @@ const wsConnections = {};
  * @apiSuccess {String} roomId The unique ID of the created room.
  * @apiError (404) NotFound Room not found.
  */
-app.post('/api/rooms', (req, res) => {
+app.post('/api/rooms', verifyToken, (req, res) => {
     const roomId = crypto.randomUUID();
     rooms[roomId] = [];
     res.json({ roomId });
@@ -84,7 +119,7 @@ if (process.env.NODE_ENV === 'development') {
  * @apiError (404) NotFound Room not found.
  * @apiError (500) ServerError Failed to create Calls session.
  */
-app.post('/api/rooms/:roomId/join', async (req, res) => {
+app.post('/api/rooms/:roomId/join', verifyToken, async (req, res) => {
     const { roomId } = req.params;
     const { userId } = req.body;
     if (!rooms[roomId]) {
@@ -145,7 +180,7 @@ app.post('/api/rooms/:roomId/join', async (req, res) => {
  * @apiSuccess {Object} data Response from Cloudflare Calls API.
  * @apiError (404) NotFound Session not found in this room.
  */
-app.post('/api/rooms/:roomId/sessions/:sessionId/publish', async (req, res) => {
+app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (req, res) => {
     const { roomId, sessionId } = req.params;
     const { offer, tracks } = req.body;
 
@@ -189,7 +224,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', async (req, res) => {
  * @apiSuccess {Object} data Response from Cloudflare Calls API.
  * @apiError (404) NotFound Room or Session not found.
  */
-app.post('/api/rooms/:roomId/sessions/:sessionId/pull', async (req, res) => {
+app.post('/api/rooms/:roomId/sessions/:sessionId/pull', verifyToken, async (req, res) => {
     const { roomId, sessionId } = req.params;
     const { remoteSessionId, trackName } = req.body;
 
@@ -248,7 +283,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/pull', async (req, res) => {
  *
  * @apiUse Error400
  */
-app.put('/api/rooms/:roomId/sessions/:sessionId/renegotiate', async (req, res) => {
+app.put('/api/rooms/:roomId/sessions/:sessionId/renegotiate', verifyToken, async (req, res) => {
     const { sessionId } = req.params;
     const { sdp, type } = req.body; // The client's answer
     const body = {
@@ -286,7 +321,7 @@ app.put('/api/rooms/:roomId/sessions/:sessionId/renegotiate', async (req, res) =
  *
  * @apiUse Error404
  */
-app.post('/api/rooms/:roomId/sessions/:sessionId/publish', async (req, res) => {
+app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (req, res) => {
     const { roomId, sessionId } = req.params;
     const { offer, tracks } = req.body;
 
@@ -345,7 +380,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', async (req, res) => {
  * @apiUse Error404
  * @apiUse Error400
  */
-app.post('/api/rooms/:roomId/sessions/:sessionId/datachannels/new', async (req, res) => {
+app.post('/api/rooms/:roomId/sessions/:sessionId/datachannels/new', verifyToken, async (req, res) => {
     const { roomId, sessionId } = req.params;
     const { dataChannels } = req.body;
 
@@ -402,7 +437,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/datachannels/new', async (req, 
  *
  * @apiUse Error404
  */
-app.get('/api/rooms/:roomId/participants', (req, res) => {
+app.get('/api/rooms/:roomId/participants', verifyToken, (req, res) => {
     const { roomId } = req.params;
     const room = rooms[roomId];
     if (!room) {
@@ -435,7 +470,7 @@ app.get('/api/rooms/:roomId/participants', (req, res) => {
 /* Note: This endpoint was previously listed above Renegotiate, Publish, and Data Channels.
    For better organization, it's moved under the Participants group.
 */
-app.get('/api/rooms/:roomId/participant/:sessionId/tracks', async (req, res) => {
+app.get('/api/rooms/:roomId/participant/:sessionId/tracks', verifyToken, async (req, res) => {
     const { sessionId, roomId } = req.params;
 
     if (!rooms[roomId]) {
@@ -465,7 +500,7 @@ app.get('/api/rooms/:roomId/participant/:sessionId/tracks', async (req, res) => 
  *
  * @apiError 500 Failed to generate ICE servers.
  */
-app.get('/api/ice-servers', (req, res) => {
+app.get('/api/ice-servers', verifyToken, (req, res) => {
     if (!process.env.CLOUDFLARE_TURN_ID || !process.env.CLOUDFLARE_TURN_TOKEN) {
         return res.json({
             iceServers: [
@@ -524,6 +559,9 @@ const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (ws) => {
     console.log('New WebSocket connection.');
+
+    ws.isAuthenticated = false;
+
     ws.on('message', (message) => {
         let data;
         try {
@@ -537,6 +575,11 @@ wss.on('connection', (ws) => {
                 handleWSJoin(ws, data.payload);
                 break;
             case 'data-message':
+                if (AUTH_REQUIRED && !ws.isAuthenticated) {
+                    ws.send(JSON.stringify({ error: 'Unauthorized: Please authenticate first' }));
+                    console.log('Unauthenticated websocket request to send data-message');
+                    return;
+                }
                 handleDataMessage(ws, data.payload);
                 break;
             default:
@@ -626,22 +669,40 @@ function getWebSocketByUserId(userId) {
 }
 
 /**
- * Handles a WebSocket join request by adding the user to the wsConnections.
+ * Handles a WebSocket join request by authenticating and adding the user to wsConnections.
  * @param {WebSocket} ws - The WebSocket connection.
- * @param {Object} payload - The payload containing roomId and userId.
+ * @param {Object} payload - The payload containing roomId, userId, and token.
  * @param {string} payload.roomId - The ID of the room to join.
  * @param {string} payload.userId - The user's unique identifier.
+ * @param {string} payload.token - The JWT token for authentication.
  */
-function handleWSJoin(ws, { roomId, userId }) {
-    if (!roomId || !userId) {
-        console.warn('Missing roomId/userId in WS join');
+function handleWSJoin(ws, { roomId, userId, token }) {
+    if (!roomId || !userId || (AUTH_REQUIRED && !token)) {
+        console.warn('Missing roomId, userId, or token in WS join');
+        ws.send(JSON.stringify({ error: 'Missing roomId, userId, or token' }));
         return;
     }
-    if (!wsConnections[roomId]) {
-        wsConnections[roomId] = {};
+
+    try {
+        // Verify the token
+        if (AUTH_REQUIRED) {
+            const user = jwt.verify(token, SECRET_KEY);
+        }
+
+        ws.isAuthenticated = true;
+
+        // Add user to the room
+        if (!wsConnections[roomId]) {
+            wsConnections[roomId] = {};
+        }
+        wsConnections[roomId][userId] = ws;
+
+        console.log(`User ${userId} joined room ${roomId} via WS`);
+        ws.send(JSON.stringify({ message: 'Joined room successfully' }));
+    } catch (err) {
+        console.warn('Invalid token in WS join:', err.message);
+        ws.send(JSON.stringify({ error: 'Invalid or expired token' }));
     }
-    wsConnections[roomId][userId] = ws;
-    console.log(`User ${userId} joined room ${roomId} via WS`);
 }
 
 /**

@@ -14,7 +14,9 @@ You will receive all of these tokens and identifiers after creating a [Cloudflar
 
 Your backend server (and our Express server in this example) is responsible for peer discovery and track discovery. Cloudflare does not provide this as part of the Calls service.
 
-Authentication and moderation functions should be implemented on the provided routes as you see fit for your application. A future version of this example may implement this, since it should be the responsibility of the library to amend each request with authorization headers.
+Authentication and moderation functions should be implemented on the provided routes as you see fit for your application. 
+
+The included `/auth/token` route on the server is for demonstration only, and issues a JWT token without authentication, to demonstrate the implementation requirements in the client library and server to secure requests to SFU resources.
 
 Everything you need to run the demo app is included in the example server, with no special dependencies. There is no database so it cannot scale past a single server instance.
 
@@ -48,3 +50,12 @@ Additionally, Cloudflare recommends the inclusion of the [webrtc-adapter](https:
 6. [Join a room](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#joinRoom) (by GUID)
 
 You can see an example of this flow in the example included at `public/index.html`.
+
+# Not yet implemented
+
+- You cannot enable/disable audio or video
+- You cannot switch inputs after a track has been published
+- Tracks are not correctly unpublished in most cases
+- Screen sharing does not work
+- SFU datachannels are not implemented (and probably only make sense for file transfers)
+- More..

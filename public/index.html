@@ -57,6 +57,7 @@
 </div>
 
 <div id="controls">
+    <button id="acquireToken">Acquire Token</button>
     <button id="createRoom">Create Room</button>
     <button id="joinRoom">Join Room</button>
     <button id="leaveRoom">Leave Room</button>
@@ -89,6 +90,7 @@
 
     const localVideo = document.getElementById('localVideo');
     const videosContainer = document.getElementById('videos');
+    const acquireTokenBtn = document.getElementById('acquireToken');
     const createRoomBtn = document.getElementById('createRoom');
     const joinRoomBtn = document.getElementById('joinRoom');
     const leaveRoomBtn = document.getElementById('leaveRoom');
@@ -214,21 +216,44 @@
     });
 
     // ===== 7) Button handlers =====
+    acquireTokenBtn.addEventListener('click', async () => {
+        window._username = prompt('Enter your username:');
+
+        const response = await fetch('/auth/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: _username }),
+        });
+        const { token } = await response.json();
+        calls.setToken(token);
+
+        alert('Token acquired and stored.');
+    });
+
     createRoomBtn.addEventListener('click', async () => {
-        const roomId = await calls.createRoom();
-        alert('Created room with ID: ' + roomId);
+        window._roomId = await calls.createRoom();
+        history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
+        alert('Created room with ID: ' + _roomId);
     });
 
     joinRoomBtn.addEventListener('click', async () => {
-        const roomId = prompt('Enter Room ID to join:');
-        if (!roomId) return;
+        let searchRoomId = (location.search.split('room_id=')[1]).split('&')[0];
+        if (!window._roomId && searchRoomId) window._roomId = searchRoomId;
 
-        const username = prompt('Enter your username:');
-        const avatar = prompt('Enter your avatar URL:') || '';
+        if (!window._roomId) window._roomId = prompt('Enter Room ID to join:');
+        if (!_roomId) return;
+
+        if (!window._username) window._username = prompt('Enter your username:');
+
+        previewMediaBtn.click();
 
         try {
-            await calls.joinRoom(roomId, { username, avatar });
-            console.log('Joined room:', roomId);
+            await calls.joinRoom(_roomId, { username: _username });
+            console.log('Joined room:', _roomId);
+
+            history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
+
+            alert('Successfully joined room: ' + _roomId);
 
             // (Optional) publish a "chat" data channel for others to subscribe
             // await calls.publishDataChannel('chat');

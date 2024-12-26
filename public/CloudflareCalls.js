@@ -19,6 +19,7 @@ class CloudflareCalls {
         this.backendUrl = config.backendUrl || '';
         this.websocketUrl = config.websocketUrl || '';
 
+        this.token = null;
         this.roomId = null;
         this.sessionId = null;
         this.userId = this._generateUUID();
@@ -45,6 +46,40 @@ class CloudflareCalls {
         this.availableAudioOutputDevices = [];
         this.currentAudioOutputDeviceId = null;
     }
+
+    /**
+     * Internal method to perform fetch requests with automatic token inclusion and JSON parsing.
+     * @private
+     * @param {string} url - The full URL to fetch.
+     * @param {Object} options - Fetch options such as method, headers, body, etc.
+     * @returns {Promise<Object>} The parsed JSON response.
+     * @throws {Error} If the response is not OK.
+     */
+    async _fetch(url, options = {}) {
+        // Initialize headers if not provided
+        options.headers = options.headers || {};
+
+        // Add Authorization header if token is set
+        if (this.token) {
+            options.headers['Authorization'] = `Bearer ${this.token}`;
+        }
+
+        try {
+            const response = await fetch(url, options);
+
+            // Check if the response status is OK (status in the range 200-299)
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+            }
+
+            return response;
+        } catch (error) {
+            console.error(`Fetch error for ${url}:`, error);
+            throw error;
+        }
+    }
+
 
     /************************************************
      * Callback Registration
@@ -87,6 +122,14 @@ class CloudflareCalls {
      ***********************************************/
 
     /**
+     * Sets the user token for server requests. This should be a JWT token, and will be delivered in Authorization headers (HTTP) and to authenticate websocket join requests.
+     * @param {String} token - The metadata to associate with the user.
+     */
+    setToken(token) {
+        this.token = token;
+    }
+
+    /**
      * Sets the user metadata and updates it on the server.
      * @param {Object} metadata - The metadata to associate with the user.
      */
@@ -116,7 +159,7 @@ class CloudflareCalls {
 
         try {
             const updateUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/metadata`;
-            const response = await fetch(updateUrl, {
+            const response = await this._fetch(updateUrl, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(this.userMetadata)
@@ -142,7 +185,7 @@ class CloudflareCalls {
      * @returns {Promise<string>} The ID of the created room.
      */
     async createRoom() {
-        const resp = await fetch(`${this.backendUrl}/api/rooms`, { method: 'POST' })
+        const resp = await this._fetch(`${this.backendUrl}/api/rooms`, { method: 'POST' })
             .then(r => r.json());
         this.roomId = resp.roomId;
         console.log('Created room', this.roomId);
@@ -162,7 +205,7 @@ class CloudflareCalls {
         await this._initWebSocket();
 
         // 1) Ask server to create a CF Calls session
-        const joinResp = await fetch(`${this.backendUrl}/api/rooms/${roomId}/join`, {
+        const joinResp = await this._fetch(`${this.backendUrl}/api/rooms/${roomId}/join`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId: this.userId, metadata: this.userMetadata })
@@ -264,7 +307,7 @@ class CloudflareCalls {
         }
 
         // Notify the server to remove tracks
-        await fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`, {
+        await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({})
@@ -322,7 +365,7 @@ class CloudflareCalls {
             metadata: this.userMetadata
         };
         const publishUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/publish`;
-        const resp = await fetch(publishUrl, {
+        const resp = await this._fetch(publishUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -351,7 +394,7 @@ class CloudflareCalls {
         const pullUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/pull`;
         const body = { remoteSessionId, trackName };
 
-        const resp = await fetch(pullUrl, {
+        const resp = await this._fetch(pullUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -366,7 +409,7 @@ class CloudflareCalls {
             await this.peerConnection.setRemoteDescription(resp.sessionDescription);
             const localAnswer = await this.peerConnection.createAnswer();
             await this.peerConnection.setLocalDescription(localAnswer);
-            await fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/renegotiate`, {
+            await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/renegotiate`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sdp: localAnswer.sdp, type: localAnswer.type })
@@ -397,7 +440,7 @@ class CloudflareCalls {
         ];
 
         try {
-            const response = await fetch(`${this.backendUrl}/api/ice-servers`);
+            const response = await this._fetch(`${this.backendUrl}/api/ice-servers`);
             if (!response.ok) {
                 throw new Error(`Failed to fetch ICE servers: ${response.status} ${response.statusText}`);
             }
@@ -484,7 +527,7 @@ class CloudflareCalls {
                 console.log('WebSocket open');
                 this.ws.send(JSON.stringify({
                     type: 'join-websocket',
-                    payload: { roomId: this.roomId, userId: this.userId }
+                    payload: { roomId: this.roomId, userId: this.userId, token: this.token }
                 }));
                 resolve();
             };
@@ -503,7 +546,7 @@ class CloudflareCalls {
                     }
 
                     // Next, fetch that participant’s publishedTracks
-                    const trackList = await fetch(
+                    const trackList = await this._fetch(
                         `${this.backendUrl}/api/rooms/${this.roomId}/participant/${payload.sessionId}/tracks`
                     ).then(res => res.json());
 
@@ -565,7 +608,7 @@ class CloudflareCalls {
     _startPolling() {
         this.pollingInterval = setInterval(async () => {
             try {
-                const resp = await fetch(`${this.backendUrl}/api/rooms/${this.roomId}/participants`)
+                const resp = await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/participants`)
                     .then(r => r.json());
                 const participants = resp.participants || [];
 
@@ -842,7 +885,7 @@ class CloudflareCalls {
                 tracks: [trackInfo]
             };
             const publishUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/publish`;
-            const resp = await fetch(publishUrl, {
+            const resp = await this._fetch(publishUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -881,7 +924,7 @@ class CloudflareCalls {
         screenTrack.stop();
 
         // Notify server to remove that track
-        await fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`, {
+        await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ trackName: screenTrack.id })
@@ -959,7 +1002,7 @@ class CloudflareCalls {
             throw new Error('Not connected to any room.');
         }
 
-        const resp = await fetch(`${this.backendUrl}/api/rooms/${this.roomId}/participants`)
+        const resp = await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/participants`)
             .then(r => r.json());
 
         return resp.participants || [];
@@ -989,7 +1032,7 @@ class CloudflareCalls {
      * @returns {Promise<Object>} The JSON response from the server.
      */
     async sendRequest(apiPath, body) {
-        const response = await fetch(`${this.backendUrl}${apiPath}`, {
+        const response = await this._fetch(`${this.backendUrl}${apiPath}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
