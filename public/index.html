@@ -157,26 +157,39 @@
     // ===== 4) Remote Track Handling =====
     calls.onRemoteTrack(track => {
         console.log('New remote track kind:', track.kind);
+        const newStream = new MediaStream([track]);
+        let mediaElement;
+
         if (track.kind === 'video') {
-            const newStream = new MediaStream([track]);
-            const vidEl = document.createElement('video');
-            vidEl.autoplay = true;
-            vidEl.playsInline = true;
-            vidEl.width = 300;
-            vidEl.height = 225;
-            vidEl.setAttribute('data-session-id', track.sessionId);
-            vidEl.setAttribute('data-track-kind', 'video');
-            videosContainer.appendChild(vidEl);
-            vidEl.srcObject = newStream;
+            mediaElement = document.createElement('video');
+            mediaElement.width = 300;
+            mediaElement.height = 225;
         } else if (track.kind === 'audio') {
-            const newStream = new MediaStream([track]);
-            const audioEl = document.createElement('audio');
-            audioEl.autoplay = true;
-            audioEl.controls = true;
-            audioEl.setAttribute('data-session-id', track.sessionId);
-            audioEl.setAttribute('data-track-kind', 'audio');
-            videosContainer.appendChild(audioEl);
-            audioEl.srcObject = newStream;
+            mediaElement = document.createElement('audio');
+            mediaElement.controls = true;
+        }
+
+        if (mediaElement) {
+            mediaElement.autoplay = true;
+            mediaElement.playsInline = true;
+            mediaElement.srcObject = newStream;
+            mediaElement.setAttribute('data-session-id', track.sessionId);
+            mediaElement.setAttribute('data-track-kind', track.kind);
+            mediaElement.setAttribute('data-track-name', track.id); // Add trackName attribute
+            videosContainer.appendChild(mediaElement);
+        }
+    });
+
+    // ===== 4b) Handle Track Unpublished Events =====
+    calls.onRemoteTrackUnpublished((sessionId, trackName) => {
+        console.log(`Remote track unpublished: ${trackName} from session ${sessionId}`);
+        // Remove the specific track's media element
+        const mediaElement = document.querySelector(
+            `[data-session-id="${sessionId}"][data-track-name="${trackName}"]`
+        );
+        if (mediaElement) {
+            mediaElement.remove();
+            console.log(`Removed media element for track ${trackName} from session ${sessionId}`);
         }
     });
 
@@ -212,7 +225,12 @@
 
     calls.onParticipantLeft((sessionId) => {
         console.log('Participant left:', sessionId);
-        // Optionally remove any associated UI
+        // Remove all media elements for this participant
+        const participantElements = document.querySelectorAll(`[data-session-id="${sessionId}"]`);
+        participantElements.forEach(element => {
+            element.remove();
+            console.log(`Removed media element for session ${sessionId}`);
+        });
     });
 
     // ===== 7) Button handlers =====
@@ -274,15 +292,23 @@
     });
 
     toggleVideoBtn.addEventListener('click', () => {
-        const isEnabled = localVideo.srcObject?.getVideoTracks()[0]?.enabled ?? true;
-        calls.toggleMedia({ video: !isEnabled, audio: false });
-        toggleVideoBtn.textContent = isEnabled ? 'Enable Video' : 'Disable Video';
+        const videoTrack = localVideo.srcObject?.getVideoTracks()[0];
+        if (videoTrack) {
+            const isEnabled = videoTrack.enabled;
+            videoTrack.enabled = !isEnabled;
+            calls.toggleMedia({ video: !isEnabled, audio: null });
+            toggleVideoBtn.textContent = isEnabled ? 'Enable Video' : 'Disable Video';
+        }
     });
 
     toggleAudioBtn.addEventListener('click', () => {
-        const isEnabled = localVideo.srcObject?.getAudioTracks()[0]?.enabled ?? true;
-        calls.toggleMedia({ audio: !isEnabled, video: false });
-        toggleAudioBtn.textContent = isEnabled ? 'Enable Audio' : 'Disable Audio';
+        const audioTrack = localVideo.srcObject?.getAudioTracks()[0];
+        if (audioTrack) {
+            const isEnabled = audioTrack.enabled;
+            audioTrack.enabled = !isEnabled;
+            calls.toggleMedia({ audio: !isEnabled, video: null });
+            toggleAudioBtn.textContent = isEnabled ? 'Enable Audio' : 'Disable Audio';
+        }
     });
 
     shareScreenBtn.addEventListener('click', async () => {

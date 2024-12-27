@@ -212,6 +212,73 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
 });
 
 /**
+ * @api {post} /api/rooms/:roomId/sessions/:sessionId/unpublish Unpublish a Track
+ * @apiName UnpublishTrack
+ * @apiGroup Sessions
+ *
+ * @apiParam {String} roomId The ID of the room.
+ * @apiParam {String} sessionId The session ID of the participant.
+ *
+ * @apiBody {String} trackName The name/ID of the track to unpublish.
+ *
+ * @apiSuccess {Object} data Response from Cloudflare Calls API.
+ * @apiError (404) NotFound Session or Room not found.
+ * @apiError (400) BadRequest Missing trackName or invalid.
+ */
+app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async (req, res) => {
+    const { roomId, sessionId } = req.params;
+    const { trackName } = req.body;
+
+    if (!trackName) {
+        return res.status(400).json({ error: 'trackName is required to unpublish a track.' });
+    }
+
+    const participants = rooms[roomId] || [];
+    const participant = participants.find(p => p.sessionId === sessionId);
+    if (!participant) {
+        return res.status(404).json({ error: 'Session not found in this room.' });
+    }
+
+    // Remove the track from the participant's publishedTracks
+    const trackIndex = participant.publishedTracks.indexOf(trackName);
+    if (trackIndex === -1) {
+        return res.status(400).json({ error: `Track ${trackName} is not published by this session.` });
+    }
+    participant.publishedTracks.splice(trackIndex, 1);
+
+    // Notify Cloudflare Calls API to remove the track
+    try {
+        const cfResp = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/${trackName}/remove`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${CLOUDFLARE_APP_SECRET}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const data = await cfResp.json();
+
+        if (data.errorCode) {
+            return res.status(400).json({ error: data.errorDescription || 'Failed to unpublish track.' });
+        }
+
+        // Optionally, broadcast to other participants that a track has been unpublished
+        broadcastToRoom(roomId, {
+            type: 'track-unpublished',
+            payload: {
+                sessionId,
+                trackName
+            }
+        }, sessionId);
+
+        return res.json(data);
+    } catch (error) {
+        console.error(`Error unpublishing track ${trackName}:`, error);
+        return res.status(500).json({ error: 'Internal server error while unpublishing track.' });
+    }
+});
+
+/**
  * @api {post} /api/rooms/:roomId/sessions/:sessionId/pull Pull remote tracks
  * @apiName PullTracks
  * @apiGroup Sessions
@@ -559,6 +626,7 @@ const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (ws) => {
     console.log('New WebSocket connection.');
+    // ws.setNoDelay(true);
 
     ws.isAuthenticated = false;
 

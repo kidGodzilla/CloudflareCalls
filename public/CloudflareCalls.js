@@ -35,6 +35,7 @@ class CloudflareCalls {
         this._onDataMessageCallback = null;
         this._onParticipantJoinedCallback = null;
         this._onParticipantLeftCallback = null;
+        this._onRemoteTrackUnpublishedCallback = null;
 
         // Track management
         this.pulledTracks = new Map(); // Map<sessionId, Set<trackName>>
@@ -45,6 +46,9 @@ class CloudflareCalls {
         this.availableVideoInputDevices = [];
         this.availableAudioOutputDevices = [];
         this.currentAudioOutputDeviceId = null;
+
+        this._renegotiateTimeout = null;
+        this.publishedTracks = new Set();
     }
 
     /**
@@ -91,6 +95,14 @@ class CloudflareCalls {
      */
     onRemoteTrack(callback) {
         this._onRemoteTrackCallback = callback;
+    }
+
+    /**
+     * Registers a callback for remote track unpublished events.
+     * @param {Function} callback - The callback function to handle track unpublished events.
+     */
+    onRemoteTrackUnpublished(callback) {
+        this._onRemoteTrackUnpublishedCallback = callback;
     }
 
     /**
@@ -314,6 +326,99 @@ class CloudflareCalls {
         });
 
         console.log('Unpublished all local tracks.');
+    }
+
+    /**
+     * Unpublishes a specific local media track (audio or video).
+     * @async
+     * @param {string} trackKind - The kind of track to unpublish ('audio' or 'video').
+     * @returns {Promise<void>}
+     */
+    async unpublishTrack(trackKind) {
+        if (!this.peerConnection) {
+            console.warn('PeerConnection is not established.');
+            return;
+        }
+
+        // Find the sender for the specified track kind
+        const sender = this.peerConnection.getSenders().find(s => s.track && s.track.kind === trackKind);
+        if (!sender) {
+            console.warn(`No ${trackKind} track found to unpublish.`);
+            return;
+        }
+
+        // Remove the track from the PeerConnection
+        this.peerConnection.removeTrack(sender);
+        console.log(`Removed ${trackKind} track from PeerConnection.`);
+
+        // Stop the local track
+        sender.track.stop();
+
+        // Notify the SFU to unpublish the specific track
+        try {
+            const unpublishUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`;
+            const body = { trackName: sender.track.id };
+            const response = await this._fetch(unpublishUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(r => r.json());
+
+            if (response.errorCode) {
+                console.error(`Failed to unpublish ${trackKind} track:`, response.errorDescription);
+                return;
+            }
+
+            console.log(`Successfully unpublished ${trackKind} track.`);
+        } catch (error) {
+            console.error(`Error unpublishing ${trackKind} track:`, error);
+        }
+
+        // Optionally, renegotiate the connection if required by the SFU
+        await this._renegotiate();
+    }
+
+    /**
+     * Initiates renegotiation of the PeerConnection.
+     * @async
+     * @private
+     * @returns {Promise<void>}
+     */
+    async _renegotiate() {
+        if (!this.peerConnection) return;
+
+        if (this._renegotiateTimeout) {
+            clearTimeout(this._renegotiateTimeout);
+        }
+
+        this._renegotiateTimeout = setTimeout(async () => {
+            try {
+                console.log('Starting renegotiation process...');
+                const offer = await this.peerConnection.createOffer();
+                console.log('Created renegotiation offer:', offer.sdp);
+                await this.peerConnection.setLocalDescription(offer);
+
+                const renegotiateUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/renegotiate`;
+                const body = { sdp: offer.sdp, type: offer.type };
+                console.log(`Sending renegotiate request to ${renegotiateUrl} with body:`, body);
+
+                const response = await this._fetch(renegotiateUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                }).then(r => r.json());
+
+                if (response.errorCode) {
+                    console.error('Renegotiation failed:', response.errorDescription);
+                    return;
+                }
+
+                await this.peerConnection.setRemoteDescription(response.sessionDescription);
+                console.log('Renegotiation successful. Applied SFU answer.');
+            } catch (error) {
+                console.error('Error during renegotiation:', error);
+            }
+        }, 500); // Wait 500ms before renegotiating
     }
 
     /**
@@ -571,6 +676,16 @@ class CloudflareCalls {
                         }
                     }
 
+                } else if (type === 'track-unpublished') {
+                    const { sessionId, trackName } = payload;
+                    console.log(`Track unpublished: ${trackName} from session ${sessionId}`);
+
+                    if (this._onRemoteTrackUnpublishedCallback) {
+                        this._onRemoteTrackUnpublishedCallback(sessionId, trackName);
+                    }
+
+                    // Optionally, remove the media element associated with this track
+                    this._removeRemoteTrack(sessionId, trackName);
                 } else if (type === 'participant-left') {
                     const { sessionId } = payload;
                     if (this._onParticipantLeftCallback) {
@@ -640,13 +755,22 @@ class CloudflareCalls {
      * @returns {void}
      */
     _removeParticipantTracks(sessionId) {
-        // Remove media elements associated with a participant
-        const videos = document.querySelectorAll(`[data-session-id="${sessionId}"][data-track-kind="video"]`);
-        const audios = document.querySelectorAll(`[data-session-id="${sessionId}"][data-track-kind="audio"]`);
-        videos.forEach(video => video.remove());
-        audios.forEach(audio => audio.remove());
+        // Just notify via callback
+        if (this._onParticipantLeftCallback) {
+            this._onParticipantLeftCallback(sessionId);
+        }
+    }
 
-        console.log(`Removed all tracks for sessionId: ${sessionId}`);
+    /**
+     * Removes a specific remote media track from the DOM.
+     * @private
+     * @param {string} sessionId - The session ID of the remote participant.
+     * @param {string} trackName - The name/ID of the track to remove.
+     */
+    _removeRemoteTrack(sessionId, trackName) {
+        if (this._onRemoteTrackUnpublishedCallback) {
+            this._onRemoteTrackUnpublishedCallback(sessionId, trackName);
+        }
     }
 
     /************************************************
@@ -831,24 +955,36 @@ class CloudflareCalls {
     /**
      * Toggles the enabled state of video and/or audio tracks.
      * @param {Object} options - Options to toggle media tracks.
-     * @param {boolean} [options.video=true] - Whether to toggle video tracks.
-     * @param {boolean} [options.audio=true] - Whether to toggle audio tracks.
+     * @param {boolean} [options.video=null] - Whether to toggle video tracks.
+     * @param {boolean} [options.audio=null] - Whether to toggle audio tracks.
      * @returns {void}
      */
-    toggleMedia({ video = true, audio = true }) {
+    toggleMedia({ video = null, audio = null }) {
         if (!this.localStream) return;
 
-        if (video) {
-            this.localStream.getVideoTracks().forEach(track => {
-                track.enabled = !track.enabled;
-                console.log(`Video track ${track.id} enabled: ${track.enabled}`);
+        if (video !== null) {
+            const videoTracks = this.localStream.getVideoTracks();
+            videoTracks.forEach(track => {
+                track.enabled = video;
+                // Find the corresponding sender and update the track status
+                const sender = this.peerConnection?.getSenders().find(s => s.track === track);
+                if (sender) {
+                    // Send track status update to SFU
+                    this._updateTrackStatus(sender.track.id, 'video', video);
+                }
             });
         }
 
-        if (audio) {
-            this.localStream.getAudioTracks().forEach(track => {
-                track.enabled = !track.enabled;
-                console.log(`Audio track ${track.id} enabled: ${track.enabled}`);
+        if (audio !== null) {
+            const audioTracks = this.localStream.getAudioTracks();
+            audioTracks.forEach(track => {
+                track.enabled = audio;
+                // Find the corresponding sender and update the track status
+                const sender = this.peerConnection?.getSenders().find(s => s.track === track);
+                if (sender) {
+                    // Send track status update to SFU
+                    this._updateTrackStatus(sender.track.id, 'audio', audio);
+                }
             });
         }
     }
@@ -1059,6 +1195,32 @@ class CloudflareCalls {
      */
     handleIncomingData(evt) {
         console.log('Received message:', evt.data);
+    }
+
+    /**
+     * Add this new method to handle track status updates
+     * @async
+     * @param {string} trackId - The ID of the track to update.
+     * @param {string} kind - The kind of track ('video' or 'audio').
+     * @param {boolean} enabled - Whether the track is enabled.
+     * @returns {Promise<void>}
+     */
+    async _updateTrackStatus(trackId, kind, enabled) {
+        try {
+            const updateUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/track-status`;
+            await this._fetch(updateUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    trackId,
+                    kind,
+                    enabled
+                })
+            });
+            console.log(`Updated ${kind} track ${trackId} status: enabled=${enabled}`);
+        } catch (error) {
+            console.error(`Error updating track status:`, error);
+        }
     }
 }
 
