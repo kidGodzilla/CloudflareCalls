@@ -49,6 +49,9 @@ class CloudflareCalls {
 
         this._renegotiateTimeout = null;
         this.publishedTracks = new Set();
+
+        this.midToSessionId = new Map();
+        this.midToTrackName = new Map();
     }
 
     /**
@@ -127,6 +130,14 @@ class CloudflareCalls {
      */
     onParticipantLeft(callback) {
         this._onParticipantLeftCallback = callback;
+    }
+
+    /**
+     * Registers a callback for track status changed events.
+     * @param {Function} callback - The callback function to handle track status changes.
+     */
+    onTrackStatusChanged(callback) {
+        this._onTrackStatusChangedCallback = callback;
     }
 
     /************************************************
@@ -394,12 +405,12 @@ class CloudflareCalls {
         this._renegotiateTimeout = setTimeout(async () => {
             try {
                 console.log('Starting renegotiation process...');
-                const offer = await this.peerConnection.createOffer();
-                console.log('Created renegotiation offer:', offer.sdp);
-                await this.peerConnection.setLocalDescription(offer);
+                const answer = await this.peerConnection.createAnswer();
+                console.log('Created renegotiation answer:', answer.sdp);
+                await this.peerConnection.setLocalDescription(answer);
 
                 const renegotiateUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/renegotiate`;
-                const body = { sdp: offer.sdp, type: offer.type };
+                const body = { sdp: answer.sdp, type: answer.type };
                 console.log(`Sending renegotiate request to ${renegotiateUrl} with body:`, body);
 
                 const response = await this._fetch(renegotiateUrl, {
@@ -414,11 +425,11 @@ class CloudflareCalls {
                 }
 
                 await this.peerConnection.setRemoteDescription(response.sessionDescription);
-                console.log('Renegotiation successful. Applied SFU answer.');
+                console.log('Renegotiation successful. Applied SFU response.');
             } catch (error) {
                 console.error('Error during renegotiation:', error);
             }
-        }, 500); // Wait 500ms before renegotiating
+        }, 500);
     }
 
     /**
@@ -509,18 +520,54 @@ class CloudflareCalls {
             console.error('Pull error:', resp.errorDescription);
             return;
         }
+
         if (resp.requiresImmediateRenegotiation) {
             console.log('Pull => requires renegotiation');
+            
+            // Set up both mappings from the SDP
+            const pendingMids = new Set();
+            resp.sessionDescription.sdp.split('\n').forEach(line => {
+                if (line.startsWith('a=mid:')) {
+                    const mid = line.split(':')[1].trim();
+                    pendingMids.add(mid);
+                    this.midToSessionId.set(mid, remoteSessionId);
+                    this.midToTrackName.set(mid, trackName);
+                    console.log('Pre-mapped MID:', {
+                        mid,
+                        sessionId: remoteSessionId,
+                        trackName
+                    });
+                }
+            });
+
+            // Now set the remote description
             await this.peerConnection.setRemoteDescription(resp.sessionDescription);
+            
+            // Create and set local answer
             const localAnswer = await this.peerConnection.createAnswer();
             await this.peerConnection.setLocalDescription(localAnswer);
+
+            // Verify mappings are still correct
+            const transceivers = this.peerConnection.getTransceivers();
+            transceivers.forEach(transceiver => {
+                if (transceiver.mid && pendingMids.has(transceiver.mid)) {
+                    console.log('Verified MID mapping:', {
+                        mid: transceiver.mid,
+                        sessionId: remoteSessionId,
+                        direction: transceiver.direction
+                    });
+                }
+            });
+
             await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/renegotiate`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sdp: localAnswer.sdp, type: localAnswer.type })
             });
         }
+
         console.log(`Pulled trackName="${trackName}" from session ${remoteSessionId}`);
+        console.log('Current MID mappings:', Array.from(this.midToSessionId.entries()));
 
         // Record the pulled track
         if (!this.pulledTracks.has(remoteSessionId)) {
@@ -607,11 +654,48 @@ class CloudflareCalls {
         };
 
         pc.ontrack = (evt) => {
-            console.log('ontrack =>', evt.track.kind, evt.track.id);
+            console.log('ontrack event:', {
+                kind: evt.track.kind,
+                webrtcTrackId: evt.track.id,
+                mid: evt.transceiver?.mid
+            });
+
             if (this._onRemoteTrackCallback) {
-                // Attach sessionId to the track object for identification if needed
-                evt.track.sessionId = evt.transceiver.mid;
-                this._onRemoteTrackCallback(evt.track);
+                const mid = evt.transceiver?.mid;
+                const sessionId = this.midToSessionId.get(mid);
+                const trackName = this.midToTrackName.get(mid);
+
+                console.log('Track mapping lookup:', {
+                    mid,
+                    sessionId,
+                    trackName,
+                    webrtcTrackId: evt.track.id,
+                    availableMappings: {
+                        sessions: Array.from(this.midToSessionId.entries()),
+                        tracks: Array.from(this.midToTrackName.entries())
+                    }
+                });
+
+                if (!sessionId) {
+                    console.warn('No sessionId found for mid:', mid);
+                    if (!this.pendingTracks) this.pendingTracks = [];
+                    this.pendingTracks.push({ evt, mid });
+                    return;
+                }
+
+                const wrappedTrack = evt.track;
+                wrappedTrack.sessionId = sessionId;
+                wrappedTrack.mid = mid;
+                wrappedTrack.trackName = trackName;
+
+                console.log('Sending track to callback:', {
+                    webrtcTrackId: wrappedTrack.id,
+                    trackName: wrappedTrack.trackName,
+                    sessionId: wrappedTrack.sessionId,
+                    mid: wrappedTrack.mid
+                });
+
+                this._onRemoteTrackCallback(wrappedTrack);
             }
         };
 
@@ -637,69 +721,18 @@ class CloudflareCalls {
                 resolve();
             };
             this.ws.onmessage = async (evt) => {
-                const { type, payload } = JSON.parse(evt.data);
-
-                if (type === 'participant-joined') {
-                    console.log('New participant =>', payload.sessionId, this.roomId);
-
-                    if (!this.pulledTracks.has(payload.sessionId)) {
-                        this.pulledTracks.set(payload.sessionId, new Set());
-                    }
-
-                    if (this._onParticipantJoinedCallback) {
-                        this._onParticipantJoinedCallback(payload);
-                    }
-
-                    // Next, fetch that participant’s publishedTracks
-                    const trackList = await this._fetch(
-                        `${this.backendUrl}/api/rooms/${this.roomId}/participant/${payload.sessionId}/tracks`
-                    ).then(res => res.json());
-
-                    console.log('trackList', trackList);
-
-                    // Now pull each track
-                    for (const tName of trackList) {
-                        if (!this.pulledTracks.get(payload.sessionId).has(tName)) {
-                            console.log('_pullTracks', payload.sessionId, tName);
-                            await this._pullTracks(payload.sessionId, tName);
+                console.log('WebSocket message received:', evt.data);
+                const data = JSON.parse(evt.data);
+                
+                switch (data.type) {
+                    case 'track-unpublished':
+                        console.log('Track unpublished event received:', data.payload);
+                        if (this._onRemoteTrackUnpublishedCallback) {
+                            this._onRemoteTrackUnpublishedCallback(data.payload.sessionId, data.payload.trackName);
                         }
-                    }
-
-                } else if (type === 'track-published') {
-                    const { sessionId, trackNames } = payload;
-                    for (const tName of trackNames) {
-                        if (!this.pulledTracks.has(sessionId)) {
-                            this.pulledTracks.set(sessionId, new Set());
-                        }
-                        if (!this.pulledTracks.get(sessionId).has(tName)) {
-                            await this._pullTracks(sessionId, tName);
-                        }
-                    }
-
-                } else if (type === 'track-unpublished') {
-                    const { sessionId, trackName } = payload;
-                    console.log(`Track unpublished: ${trackName} from session ${sessionId}`);
-
-                    if (this._onRemoteTrackUnpublishedCallback) {
-                        this._onRemoteTrackUnpublishedCallback(sessionId, trackName);
-                    }
-
-                    // Optionally, remove the media element associated with this track
-                    this._removeRemoteTrack(sessionId, trackName);
-                } else if (type === 'participant-left') {
-                    const { sessionId } = payload;
-                    if (this._onParticipantLeftCallback) {
-                        this._onParticipantLeftCallback(sessionId);
-                    }
-                    this._removeParticipantTracks(sessionId);
-                    this.pulledTracks.delete(sessionId);
-                } else if (type === 'data-message') {
-                    // Handle incoming data messages
-                    if (this._onDataMessageCallback) {
-                        this._onDataMessageCallback(payload);
-                    }
+                        break;
+                    // ... other cases ...
                 }
-                // else handle other messages as needed
             };
             this.ws.onerror = (err) => {
                 console.error('WebSocket error:', err);
@@ -1197,14 +1230,8 @@ class CloudflareCalls {
         console.log('Received message:', evt.data);
     }
 
-    /**
-     * Add this new method to handle track status updates
-     * @async
-     * @param {string} trackId - The ID of the track to update.
-     * @param {string} kind - The kind of track ('video' or 'audio').
-     * @param {boolean} enabled - Whether the track is enabled.
-     * @returns {Promise<void>}
-     */
+    // Remove or comment out this method as it's not implemented yet
+    /*
     async _updateTrackStatus(trackId, kind, enabled) {
         try {
             const updateUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/track-status`;
@@ -1221,6 +1248,126 @@ class CloudflareCalls {
         } catch (error) {
             console.error(`Error updating track status:`, error);
         }
+    }
+    */
+
+    /**
+     * Unpublishes all currently published tracks
+     * @async
+     * @returns {Promise<void>}
+     */
+    async unpublishAllTracks() {
+        if (!this.peerConnection) {
+            console.warn('PeerConnection is not established.');
+            return;
+        }
+
+        const senders = this.peerConnection.getSenders();
+        console.log('Unpublishing all tracks:', senders.length);
+        
+        for (const sender of senders) {
+            if (sender.track) {
+                try {
+                    const trackId = sender.track.id;
+                    const transceiver = this.peerConnection.getTransceivers().find(t => t.sender === sender);
+                    const mid = transceiver ? transceiver.mid : null;
+                    
+                    console.log('Unpublishing track:', { trackId, mid });
+                    
+                    if (!mid) {
+                        console.warn('No mid found for track:', trackId);
+                        continue;
+                    }
+
+                    // Stop the track first
+                    sender.track.stop();
+                    
+                    // Notify server
+                    await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            trackName: trackId,
+                            mid: mid
+                        })
+                    });
+
+                    // Remove from PeerConnection after server confirms
+                    this.peerConnection.removeTrack(sender);
+                    
+                    // Remove from our tracked set
+                    this.publishedTracks.delete(trackId);
+                    
+                    console.log(`Successfully unpublished track: ${trackId}`);
+                } catch (error) {
+                    console.error(`Error unpublishing track:`, error);
+                }
+            }
+        }
+    }
+
+    /**
+     * Handles track unpublished events from other peers
+     * @private
+     * @param {string} sessionId - The session ID of the peer
+     * @param {string} trackName - The track name/ID
+     */
+    _handleTrackUnpublished(sessionId, trackName) {
+        console.log('Track unpublished event received:', { sessionId, trackName });
+
+        // Find elements by session ID and track name
+        const mediaElements = document.querySelectorAll(
+            `[data-session-id="${sessionId}"]`
+        );
+
+        mediaElements.forEach(element => {
+            const mid = element.getAttribute('data-mid');
+            const storedTrackName = this.midToTrackName.get(mid);
+            
+            if (storedTrackName === trackName) {
+                if (element.srcObject) {
+                    element.srcObject.getTracks().forEach(track => track.stop());
+                }
+                console.log('Removing element:', {
+                    sessionId: element.dataset.sessionId,
+                    trackName: storedTrackName,
+                    mid
+                });
+                element.remove();
+            }
+        });
+
+        // Clean up our mappings
+        for (const [mid, name] of this.midToTrackName.entries()) {
+            if (name === trackName) {
+                this.midToTrackName.delete(mid);
+                this.midToSessionId.delete(mid);
+            }
+        }
+    }
+
+    /**
+     * Creates a media element for a track
+     * @private
+     * @param {MediaStreamTrack} track - The media track
+     * @param {string} sessionId - The session ID of the peer
+     * @returns {HTMLElement} The created media element
+     */
+    _createMediaElement(track, sessionId) {
+        const element = document.createElement(track.kind === 'video' ? 'video' : 'audio');
+        element.autoplay = true;
+        if (track.kind === 'video') {
+            element.playsInline = true;
+        }
+        
+        // Add data attributes for easier cleanup
+        element.dataset.sessionId = sessionId;
+        element.dataset.trackId = track.id;
+        
+        const stream = new MediaStream([track]);
+        element.srcObject = stream;
+        
+        return element;
     }
 }
 

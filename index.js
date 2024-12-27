@@ -190,12 +190,14 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
         return res.status(404).json({ error: 'Session not found in this room' });
     }
 
+    // Store these trackName(s) in participant.publishedTracks
     for (const t of tracks) {
         if (!participant.publishedTracks.includes(t.trackName)) {
             participant.publishedTracks.push(t.trackName);
         }
     }
 
+    // Now call Cloudflare to finalize the push
     const cfResp = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/new`, {
         method: 'POST',
         headers: {
@@ -208,6 +210,16 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
         })
     });
     const data = await cfResp.json();
+    if (data.sessionDescription) {
+        // Emit a 'track-published' event to other participants in the room
+        broadcastToRoom(roomId, {
+            type: 'track-published',
+            payload: {
+                sessionId,
+                trackNames: tracks.map(t => t.trackName)
+            }
+        }, participant.userId);
+    }
     return res.json(data);
 });
 
@@ -226,55 +238,68 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
  * @apiError (400) BadRequest Missing trackName or invalid.
  */
 app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async (req, res) => {
-    const { roomId, sessionId } = req.params;
-    const { trackName } = req.body;
-
-    if (!trackName) {
-        return res.status(400).json({ error: 'trackName is required to unpublish a track.' });
-    }
-
-    const participants = rooms[roomId] || [];
-    const participant = participants.find(p => p.sessionId === sessionId);
-    if (!participant) {
-        return res.status(404).json({ error: 'Session not found in this room.' });
-    }
-
-    // Remove the track from the participant's publishedTracks
-    const trackIndex = participant.publishedTracks.indexOf(trackName);
-    if (trackIndex === -1) {
-        return res.status(400).json({ error: `Track ${trackName} is not published by this session.` });
-    }
-    participant.publishedTracks.splice(trackIndex, 1);
-
-    // Notify Cloudflare Calls API to remove the track
     try {
-        const cfResp = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/${trackName}/remove`, {
-            method: 'POST',
+        const { roomId, sessionId } = req.params;
+        const { trackName, mid } = req.body;
+
+        console.log('Unpublishing track:', { roomId, sessionId, trackName, mid });
+
+        if (!mid) {
+            return res.status(400).json({ error: 'mid is required to unpublish a track.' });
+        }
+
+        // Call Cloudflare API to close the track
+        const cfUrl = `${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/close`;
+        console.log('Calling Cloudflare API:', cfUrl);
+        
+        const requestBody = {
+            tracks: [{
+                mid: mid.toString() // Ensure mid is a string
+            }],
+            force: true // Try forcing the track close without renegotiation
+        };
+
+        console.log('Request body:', JSON.stringify(requestBody, null, 2));
+        
+        const response = await fetch(cfUrl, {
+            method: 'PUT',
             headers: {
                 'Authorization': `Bearer ${CLOUDFLARE_APP_SECRET}`,
                 'Content-Type': 'application/json'
-            }
+            },
+            body: JSON.stringify(requestBody)
         });
 
-        const data = await cfResp.json();
-
-        if (data.errorCode) {
-            return res.status(400).json({ error: data.errorDescription || 'Failed to unpublish track.' });
+        let data;
+        const textResponse = await response.text();
+        try {
+            data = JSON.parse(textResponse);
+            console.log('Cloudflare API response:', data);
+        } catch (e) {
+            console.log('Raw response:', textResponse);
+            data = { success: true }; // Assume success if not JSON
         }
 
-        // Optionally, broadcast to other participants that a track has been unpublished
+        // Update local state and broadcast as before...
+        const participants = rooms[roomId] || [];
+        const participant = participants.find(p => p.sessionId === sessionId);
+        if (participant) {
+            participant.publishedTracks = participant.publishedTracks.filter(t => t !== trackName);
+            console.log('Updated participant tracks:', participant.publishedTracks);
+        }
+
         broadcastToRoom(roomId, {
             type: 'track-unpublished',
-            payload: {
-                sessionId,
-                trackName
-            }
+            payload: { sessionId, trackName }
         }, sessionId);
 
-        return res.json(data);
+        res.json(data);
     } catch (error) {
-        console.error(`Error unpublishing track ${trackName}:`, error);
-        return res.status(500).json({ error: 'Internal server error while unpublishing track.' });
+        console.error('Detailed error unpublishing track:', error);
+        res.status(500).json({ 
+            error: 'Internal server error while unpublishing track.',
+            details: error.message 
+        });
     }
 });
 
@@ -795,11 +820,13 @@ function handleWSDisconnect(ws) {
  * @param {string|null} excludeUserId - The user ID to exclude from broadcasting.
  */
 function broadcastToRoom(roomId, message, excludeUserId = null) {
+    console.log('Broadcasting to room:', { roomId, message, excludeUserId });
     if (!wsConnections[roomId]) return;
     for (const [userId, ws] of Object.entries(wsConnections[roomId])) {
         if (userId === excludeUserId) continue;
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(message));
+            console.log('Sent WebSocket message to user:', userId, message);
         }
     }
 }

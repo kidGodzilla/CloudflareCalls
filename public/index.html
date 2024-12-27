@@ -64,6 +64,7 @@
     <button id="toggleVideo">Disable Video</button>
     <button id="toggleAudio">Disable Audio</button>
     <button id="shareScreen">Share Screen</button>
+    <button id="unpublishAll">Unpublish All Tracks</button>
 
     <select id="audioInputSelect"></select>
     <select id="videoInputSelect"></select>
@@ -156,40 +157,61 @@
 
     // ===== 4) Remote Track Handling =====
     calls.onRemoteTrack(track => {
-        console.log('New remote track kind:', track.kind);
-        const newStream = new MediaStream([track]);
-        let mediaElement;
-
-        if (track.kind === 'video') {
-            mediaElement = document.createElement('video');
-            mediaElement.width = 300;
-            mediaElement.height = 225;
-        } else if (track.kind === 'audio') {
-            mediaElement = document.createElement('audio');
-            mediaElement.controls = true;
+        console.log('New remote track:', { 
+            sessionId: track.sessionId, 
+            trackId: track.id,
+            trackName: track.trackName,
+            kind: track.kind 
+        });
+        
+        // Find or create participant container
+        let participantContainer = document.querySelector(`[data-participant-id="${track.sessionId}"]`);
+        if (!participantContainer) {
+            participantContainer = document.createElement('div');
+            participantContainer.setAttribute('data-participant-id', track.sessionId);
+            videosContainer.appendChild(participantContainer);
         }
 
-        if (mediaElement) {
-            mediaElement.autoplay = true;
-            mediaElement.playsInline = true;
-            mediaElement.srcObject = newStream;
-            mediaElement.setAttribute('data-session-id', track.sessionId);
-            mediaElement.setAttribute('data-track-kind', track.kind);
-            mediaElement.setAttribute('data-track-name', track.id); // Add trackName attribute
-            videosContainer.appendChild(mediaElement);
-        }
+        const mediaElement = track.kind === 'video' 
+            ? document.createElement('video')
+            : document.createElement('audio');
+
+        mediaElement.autoplay = true;
+        mediaElement.playsInline = true;
+        if (track.kind === 'audio') mediaElement.controls = true;
+        
+        mediaElement.setAttribute('data-session-id', track.sessionId);
+        mediaElement.setAttribute('data-track-id', track.id); // WebRTC track ID
+        mediaElement.setAttribute('data-track-name', track.trackName); // Application track name
+        mediaElement.setAttribute('data-mid', track.mid);
+        
+        mediaElement.srcObject = new MediaStream([track]);
+        participantContainer.appendChild(mediaElement);
     });
 
     // ===== 4b) Handle Track Unpublished Events =====
     calls.onRemoteTrackUnpublished((sessionId, trackName) => {
-        console.log(`Remote track unpublished: ${trackName} from session ${sessionId}`);
-        // Remove the specific track's media element
-        const mediaElement = document.querySelector(
-            `[data-session-id="${sessionId}"][data-track-name="${trackName}"]`
-        );
-        if (mediaElement) {
-            mediaElement.remove();
-            console.log(`Removed media element for track ${trackName} from session ${sessionId}`);
+        console.log('Track unpublished:', { sessionId, trackName });
+        
+        // First try exact match with track ID
+        let mediaElement = document.querySelector(`[data-session-id="${sessionId}"][data-track-name="${trackName}"]`);
+        
+        if (!mediaElement) {
+            console.warn('Could not find media element to remove:', { sessionId, trackName });
+            return;
+        }
+
+        console.log('Found and removing track element:', mediaElement);
+        if (mediaElement.srcObject) {
+            mediaElement.srcObject.getTracks().forEach(track => track.stop());
+        }
+        mediaElement.remove();
+        
+        // Check if participant container is empty
+        const participantContainer = document.querySelector(`[data-participant-id="${sessionId}"]`);
+        if (participantContainer && !participantContainer.querySelector('video, audio')) {
+            console.log('Removing empty participant container:', sessionId);
+            participantContainer.remove();
         }
     });
 
@@ -214,23 +236,34 @@
     // ===== 6) Participants =====
     calls.onParticipantJoined(async (participant) => {
         console.log('Participant joined:', participant);
-        // We can auto-subscribe to that participant’s “chat” data channel here:
+        // Create a container for this participant if it doesn't exist
+        let participantContainer = document.querySelector(`[data-participant-id="${participant.sessionId}"]`);
+        if (!participantContainer) {
+            participantContainer = document.createElement('div');
+            participantContainer.setAttribute('data-participant-id', participant.sessionId);
+            videosContainer.appendChild(participantContainer);
+        }
+
+        // We can auto-subscribe to that participant's "chat" data channel here:
         try {
             await calls.subscribeDataChannel(participant.sessionId, 'chat');
-            console.log('Subscribed to participant’s "chat" channel:', participant.sessionId);
+            console.log('Subscribed to participant\'s "chat" channel:', participant.sessionId);
         } catch (err) {
             console.warn('Error subscribing to participant chat channel:', err);
         }
     });
 
     calls.onParticipantLeft((sessionId) => {
-        console.log('Participant left:', sessionId);
-        // Remove all media elements for this participant
-        const participantElements = document.querySelectorAll(`[data-session-id="${sessionId}"]`);
-        participantElements.forEach(element => {
-            element.remove();
-            console.log(`Removed media element for session ${sessionId}`);
-        });
+        const participantContainer = document.querySelector(`[data-participant-id="${sessionId}"]`);
+        if (participantContainer) {
+            // Clean up any media elements
+            const mediaElements = participantContainer.querySelectorAll('video, audio');
+            mediaElements.forEach(element => {
+                element.srcObject = null;
+            });
+            participantContainer.remove();
+            console.log('Removed participant container:', sessionId);
+        }
     });
 
     // ===== 7) Button handlers =====
@@ -331,6 +364,11 @@
         const message = { content, fromUser: calls.userId };
 
         calls.sendDataToAll(message);
+    });
+
+    document.getElementById('unpublishAll').addEventListener('click', async () => {
+        await calls.unpublishAllTracks();
+        alert('Unpublished all tracks');
     });
 </script>
 </body>
