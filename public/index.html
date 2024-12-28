@@ -43,6 +43,27 @@
             border: 1px solid #ccc;
             padding: 10px;
         }
+        #participants {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        .participant {
+            padding: 8px;
+            margin: 4px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f5f5f5;
+        }
+        .participant button {
+            padding: 4px 8px;
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -65,6 +86,8 @@
     <button id="toggleAudio">Disable Audio</button>
     <button id="shareScreen">Share Screen</button>
     <button id="unpublishAll">Unpublish All Tracks</button>
+    <button id="getSessionState">Get Session State</button>
+    <button id="forceUnpublish">Force Unpublish Video</button>
 
     <select id="audioInputSelect"></select>
     <select id="videoInputSelect"></select>
@@ -73,6 +96,13 @@
     <button id="previewMedia">Preview Media</button>
 
     <button id="sendData">Send Data</button>
+
+    <div id="trackStatus"></div>
+</div>
+
+<div id="participants">
+    <h3>Participants</h3>
+    <div id="participantList"></div>
 </div>
 
 <div id="dataChannelMessages">
@@ -105,6 +135,12 @@
     const videoInputSelect = document.getElementById('videoInputSelect');
     const audioOutputSelect = document.getElementById('audioOutputSelect');
     const previewMediaBtn = document.getElementById('previewMedia');
+
+    const getSessionStateBtn = document.getElementById('getSessionState');
+    const forceUnpublishBtn = document.getElementById('forceUnpublish');
+    const trackStatusDiv = document.getElementById('trackStatus');
+
+    const participantList = document.getElementById('participantList');
 
     // ===== 1) Populate device lists =====
     async function populateDeviceLists() {
@@ -164,6 +200,9 @@
             kind: track.kind 
         });
         
+        // Update participant list when tracks change
+        updateParticipantList();
+        
         // Find or create participant container
         let participantContainer = document.querySelector(`[data-participant-id="${track.sessionId}"]`);
         if (!participantContainer) {
@@ -192,6 +231,9 @@
     // ===== 4b) Handle Track Unpublished Events =====
     calls.onRemoteTrackUnpublished((sessionId, trackName) => {
         console.log('Track unpublished:', { sessionId, trackName });
+        
+        // Update participant list when tracks are unpublished
+        updateParticipantList();
         
         // First try exact match with track ID
         let mediaElement = document.querySelector(`[data-session-id="${sessionId}"][data-track-name="${trackName}"]`);
@@ -236,7 +278,13 @@
     // ===== 6) Participants =====
     calls.onParticipantJoined(async (participant) => {
         console.log('Participant joined:', participant);
-        // Create a container for this participant if it doesn't exist
+        
+        // Add a small delay to ensure all backend state is updated
+        setTimeout(async () => {
+            await updateParticipantList();
+        }, 100);
+        
+        // Create participant container for future tracks
         let participantContainer = document.querySelector(`[data-participant-id="${participant.sessionId}"]`);
         if (!participantContainer) {
             participantContainer = document.createElement('div');
@@ -244,7 +292,7 @@
             videosContainer.appendChild(participantContainer);
         }
 
-        // We can auto-subscribe to that participant's "chat" data channel here:
+        // Try to subscribe to their data channel
         try {
             await calls.subscribeDataChannel(participant.sessionId, 'chat');
             console.log('Subscribed to participant\'s "chat" channel:', participant.sessionId);
@@ -253,17 +301,9 @@
         }
     });
 
-    calls.onParticipantLeft((sessionId) => {
-        const participantContainer = document.querySelector(`[data-participant-id="${sessionId}"]`);
-        if (participantContainer) {
-            // Clean up any media elements
-            const mediaElements = participantContainer.querySelectorAll('video, audio');
-            mediaElements.forEach(element => {
-                element.srcObject = null;
-            });
-            participantContainer.remove();
-            console.log('Removed participant container:', sessionId);
-        }
+    calls.onParticipantLeft(async (sessionId) => {
+        console.log('Participant left:', sessionId);
+        await updateParticipantList();
     });
 
     // ===== 7) Button handlers =====
@@ -278,7 +318,13 @@
         const { token } = await response.json();
         calls.setToken(token);
 
-        alert('Token acquired and stored.');
+        // Show moderator status
+        const userInfo = calls.getUserInfo();
+        if (userInfo?.isModerator) {
+            alert('Token acquired and stored. You have moderator privileges.');
+        } else {
+            alert('Token acquired and stored.');
+        }
     });
 
     createRoomBtn.addEventListener('click', async () => {
@@ -301,7 +347,10 @@
         try {
             await calls.joinRoom(_roomId, { username: _username });
             console.log('Joined room:', _roomId);
-
+            
+            // Update participant list after joining
+            await updateParticipantList();
+            
             history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
 
             alert('Successfully joined room: ' + _roomId);
@@ -324,13 +373,22 @@
             .forEach(media => media.remove());
     });
 
-    toggleVideoBtn.addEventListener('click', () => {
+    toggleVideoBtn.addEventListener('click', async () => {
         const videoTrack = localVideo.srcObject?.getVideoTracks()[0];
         if (videoTrack) {
             const isEnabled = videoTrack.enabled;
             videoTrack.enabled = !isEnabled;
-            calls.toggleMedia({ video: !isEnabled, audio: null });
-            toggleVideoBtn.textContent = isEnabled ? 'Enable Video' : 'Disable Video';
+            try {
+                await calls.toggleMedia({ video: !isEnabled, audio: null });
+                toggleVideoBtn.textContent = isEnabled ? 'Enable Video' : 'Disable Video';
+                
+                // Get and show updated track status
+                const status = await calls.getTrackStatus(videoTrack.id);
+                trackStatusDiv.innerHTML = `<div>Video track ${videoTrack.id}: ${status}</div>`;
+            } catch (err) {
+                console.error('Error toggling video:', err);
+                alert('Error: ' + err.message);
+            }
         }
     });
 
@@ -371,10 +429,96 @@
         alert('Unpublished all tracks');
     });
 
+    getSessionStateBtn.addEventListener('click', async () => {
+        try {
+            const state = await calls.getSessionState();
+            trackStatusDiv.innerHTML = '<h3>Track Status:</h3>' + 
+                state.tracks.map(track => 
+                    `<div>${track.trackName}: ${track.status}</div>`
+                ).join('');
+        } catch (err) {
+            console.error('Error getting session state:', err);
+            alert('Error getting session state: ' + err.message);
+        }
+    });
+
+    forceUnpublishBtn.addEventListener('click', async () => {
+        try {
+            const userInfo = calls.getUserInfo();
+            if (!userInfo?.isModerator) {
+                alert('You need moderator privileges to force unpublish tracks.');
+                return;
+            }
+
+            await calls.unpublishTrack('video', true);
+            alert('Video track force unpublished');
+        } catch (err) {
+            if (err.code === 'NOT_AUTHORIZED') {
+                alert('You are not authorized to force unpublish tracks.');
+            } else {
+                console.error('Error force unpublishing:', err);
+                alert('Error: ' + err.message);
+            }
+        }
+    });
+
     window.onbeforeunload = async function(e) {
         e.preventDefault();
         await calls.unpublishAllTracks();
         return 'Leaving room..';
+    }
+
+    async function updateParticipantList() {
+        try {
+            // Get current user info first
+            const currentUser = await calls.getUserInfo();
+            const isModerator = currentUser.isModerator;
+            
+            // Get list of participants in room
+            const participants = await calls.listParticipants();
+            
+            participantList.innerHTML = `
+                <div class="participant">
+                    <strong>You (${currentUser.username})</strong>
+                    ${isModerator ? ' 🛡️ Moderator' : ''}
+                </div>
+                ${await Promise.all(participants
+                    .filter(p => p.userId !== currentUser.userId)
+                    .map(async p => {
+                        const userInfo = await calls.getUserInfo(p.userId);
+                        return `
+                            <div class="participant">
+                                <strong>${userInfo.username}</strong>
+                                ${isModerator ? `
+                                    <button onclick="forceUnpublishParticipant('${p.sessionId}')">
+                                        Force Unpublish
+                                    </button>
+                                ` : ''}
+                            </div>
+                        `;
+                    })
+                ).then(items => items.join(''))}
+            `;
+        } catch (err) {
+            console.error('Error updating participant list:', err);
+        }
+    }
+
+    async function forceUnpublishParticipant(sessionId) {
+        try {
+            const userInfo = await calls.getUserInfo();
+            if (!userInfo.isModerator) {
+                alert('Only moderators can force unpublish tracks');
+                return;
+            }
+
+            // In a real app, you might want to specify which track to unpublish
+            await calls.unpublishTrack('video', true, sessionId);
+            alert('Forced track unpublish successful');
+        } catch (err) {
+            console.error('Error force unpublishing:', err);
+            alert('Error: ' + err.message);
+        }
     }
 </script>
 </body>

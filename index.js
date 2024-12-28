@@ -51,9 +51,25 @@ function verifyToken(req, res, next) {
 // Has no usefulness in production, just facilitates the demo
 app.post('/auth/token', (req, res) => {
     const { username } = req.body;
+    const userId = crypto.randomUUID(); // Generate unique user ID
 
     // Generate a token with arbitrary JSON payload
-    const token = jwt.sign({ username, role: 'demo' }, SECRET_KEY, { expiresIn: '8h' });
+    const token = jwt.sign({ 
+        userId,
+        username, 
+        role: 'demo',
+        isModerator: true // In production, this would come from your database
+    }, SECRET_KEY, { 
+        expiresIn: '8h' 
+    });
+
+    // Store initial user info
+    users.set(userId, {
+        userId,
+        username,
+        isModerator: true,
+        role: 'demo'
+    });
 
     res.json({ token });
 });
@@ -73,6 +89,9 @@ app.post('/auth/token', (req, res) => {
 const rooms = {};
 
 const wsConnections = {};
+
+// Add this near the top with other in-memory storage
+const users = new Map(); // Store user info
 
 /* ------------------------------------------------------------------
    Basic endpoints
@@ -121,11 +140,13 @@ if (process.env.NODE_ENV === 'development') {
  */
 app.post('/api/rooms/:roomId/join', verifyToken, async (req, res) => {
     const { roomId } = req.params;
-    const { userId } = req.body;
+    const { userId } = req.user;
+
     if (!rooms[roomId]) {
         return res.status(404).json({ error: 'Room not found' });
     }
 
+    // Create Cloudflare session...
     const response = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/new`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${CLOUDFLARE_APP_SECRET}` }
@@ -141,6 +162,14 @@ app.post('/api/rooms/:roomId/join', verifyToken, async (req, res) => {
         createdAt: Date.now(),
         publishedTracks: []
     };
+
+    // Update user info with sessionId
+    const userInfo = users.get(userId);
+    if (userInfo) {
+        userInfo.sessionId = sessionResponse.sessionId;
+        userInfo.roomId = roomId;
+    }
+
     rooms[roomId].push(participant);
 
     const otherParticipants = rooms[roomId]
@@ -151,15 +180,14 @@ app.post('/api/rooms/:roomId/join', verifyToken, async (req, res) => {
             publishedTracks: p.publishedTracks
         }));
 
-    setTimeout(() => {
-        broadcastToRoom(roomId, {
-            type: 'participant-joined',
-            payload: {
-                userId,
-                sessionId: participant.sessionId,
-            },
-        }, userId);
-    }, 1000);
+    broadcastToRoom(roomId, {
+        type: 'participant-joined',
+        payload: {
+            userId,
+            username: users.get(userId).username,
+            sessionId: participant.sessionId,
+        },
+    }, userId);
 
     res.json({
         sessionId: participant.sessionId,
@@ -224,28 +252,40 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
 });
 
 /**
- * @api {post} /api/rooms/:roomId/sessions/:sessionId/unpublish Unpublish a Track
+ * @api {post} /api/rooms/:roomId/sessions/:sessionId/unpublish Unpublish Track
  * @apiName UnpublishTrack
  * @apiGroup Sessions
- *
- * @apiParam {String} roomId The ID of the room.
- * @apiParam {String} sessionId The session ID of the participant.
- *
- * @apiBody {String} trackName The name/ID of the track to unpublish.
- *
- * @apiSuccess {Object} data Response from Cloudflare Calls API.
- * @apiError (404) NotFound Session or Room not found.
- * @apiError (400) BadRequest Missing trackName or invalid.
+ * 
+ * @apiParam {String} roomId The ID of the room
+ * @apiParam {String} sessionId The session ID of the track owner
+ * 
+ * @apiHeader {String} Authorization Bearer token
+ * 
+ * @apiError (403) Forbidden User is not authorized to force unpublish others' tracks
  */
 app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async (req, res) => {
     try {
         const { roomId, sessionId } = req.params;
-        const { trackName, mid } = req.body;
+        const { trackName, mid, force } = req.body;
+
+        // If trying to force unpublish someone else's track
+        if (force && sessionId !== req.user.sessionId) {
+            // Check if user is moderator
+            if (!req.user.isModerator) {
+                return res.status(403).json({ 
+                    errorCode: 'NOT_AUTHORIZED',
+                    errorDescription: 'Only moderators can force unpublish other participants\' tracks'
+                });
+            }
+        }
 
         console.log('Unpublishing track:', { roomId, sessionId, trackName, mid });
 
         if (!mid) {
-            return res.status(400).json({ error: 'mid is required to unpublish a track.' });
+            return res.status(400).json({ 
+                errorCode: 'INVALID_REQUEST',
+                errorDescription: 'mid is required to unpublish a track.'
+            });
         }
 
         // Call Cloudflare API to close the track
@@ -254,9 +294,9 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
         
         const requestBody = {
             tracks: [{
-                mid: mid.toString() // Ensure mid is a string
+                mid: mid.toString()
             }],
-            force: true // Try forcing the track close without renegotiation
+            force: Boolean(force)
         };
 
         console.log('Request body:', JSON.stringify(requestBody, null, 2));
@@ -270,17 +310,10 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
             body: JSON.stringify(requestBody)
         });
 
-        let data;
-        const textResponse = await response.text();
-        try {
-            data = JSON.parse(textResponse);
-            console.log('Cloudflare API response:', data);
-        } catch (e) {
-            console.log('Raw response:', textResponse);
-            data = { success: true }; // Assume success if not JSON
-        }
+        const data = await response.json();
+        console.log('Cloudflare API response:', data);
 
-        // Update local state and broadcast as before...
+        // Update local state and broadcast
         const participants = rooms[roomId] || [];
         const participant = participants.find(p => p.sessionId === sessionId);
         if (participant) {
@@ -294,11 +327,12 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
         }, sessionId);
 
         res.json(data);
+
     } catch (error) {
         console.error('Detailed error unpublishing track:', error);
         res.status(500).json({ 
-            error: 'Internal server error while unpublishing track.',
-            details: error.message 
+            errorCode: 'UNPUBLISH_ERROR',
+            errorDescription: error.message 
         });
     }
 });
@@ -367,13 +401,11 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/pull', verifyToken, async (req,
  * @apiParam {String} roomId The ID of the room.
  * @apiParam {String} sessionId The session ID of the participant.
  *
- * @apiParam (Request Body) {Object} body The request body containing sdp and type.
- * @apiParam (Request Body) {String} body.sdp The SDP offer/answer.
- * @apiParam (Request Body) {String} body.type The type of the SDP ('offer' or 'answer').
+ * @apiParam (Request Body) {Object} sessionDescription Session description object
+ * @apiParam (Request Body) {String} sessionDescription.sdp SDP string
+ * @apiParam (Request Body) {String} sessionDescription.type SDP type ('offer' or 'answer')
  *
- * @apiSuccess {Object} session Updated session information.
- *
- * @apiUse Error400
+ * @apiSuccess {Object} data Response from Cloudflare Calls API
  */
 app.put('/api/rooms/:roomId/sessions/:sessionId/renegotiate', verifyToken, async (req, res) => {
     const { sessionId } = req.params;
@@ -405,13 +437,13 @@ app.put('/api/rooms/:roomId/sessions/:sessionId/renegotiate', verifyToken, async
  * @apiParam {String} roomId The ID of the room.
  * @apiParam {String} sessionId The session ID of the participant.
  *
- * @apiParam (Request Body) {Object} body The request body containing offer and tracks.
- * @apiParam (Request Body) {Object} body.offer The SDP offer.
- * @apiParam (Request Body) {Array} body.tracks Array of track objects.
+ * @apiParam (Request Body) {Object} offer The SDP offer
+ * @apiParam (Request Body) {Array} tracks Array of track objects to publish
+ * @apiParam (Request Body) {String} tracks.location Track location ('local' or 'remote')
+ * @apiParam (Request Body) {String} tracks.trackName Unique identifier for the track
+ * @apiParam (Request Body) {String} [tracks.mid] Media ID for local tracks
  *
- * @apiSuccess {Object} response Response from Cloudflare Calls API.
- *
- * @apiUse Error404
+ * @apiSuccess {Object} data Response from Cloudflare Calls API
  */
 app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (req, res) => {
     const { roomId, sessionId } = req.params;
@@ -830,6 +862,164 @@ function broadcastToRoom(roomId, message, excludeUserId = null) {
         }
     }
 }
+
+/**
+ * @api {get} /api/rooms/:roomId/sessions/:sessionId/state Get Session State
+ * @apiName GetSessionState
+ * @apiGroup Sessions
+ * @apiDescription Retrieves the current state of a session from Cloudflare Calls API.
+ *
+ * @apiParam {String} roomId The ID of the room.
+ * @apiParam {String} sessionId The session ID to query.
+ *
+ * @apiSuccess {Object} response Session state from Cloudflare Calls API.
+ * @apiSuccess {Array} response.tracks List of tracks in the session.
+ * @apiSuccess {String} response.tracks.location Track location ('local' or 'remote').
+ * @apiSuccess {String} response.tracks.mid Media ID of the track.
+ * @apiSuccess {String} response.tracks.trackName Name/ID of the track.
+ * @apiSuccess {String} response.tracks.status Track status ('active', 'inactive', or 'waiting').
+ *
+ * @apiError (500) SessionStateError Failed to retrieve session state.
+ * @apiError (403) Forbidden Invalid or missing authentication token.
+ */
+app.get('/api/rooms/:roomId/sessions/:sessionId/state', verifyToken, async (req, res) => {
+    const { roomId, sessionId } = req.params;
+
+    try {
+        const response = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}`, {
+            headers: {
+                'Authorization': `Bearer ${CLOUDFLARE_APP_SECRET}`
+            }
+        });
+
+        const data = await response.json();
+        res.json(data);
+    } catch (error) {
+        console.error('Error getting session state:', error);
+        res.status(500).json({ 
+            errorCode: 'SESSION_STATE_ERROR',
+            errorDescription: error.message 
+        });
+    }
+});
+
+/**
+ * @api {get} /api/users/:userId Get User Info
+ * @apiName GetUserInfo
+ * @apiGroup Users
+ * @apiDescription Get information about a user. Returns full info for own user, limited info for others.
+ *
+ * @apiParam {String} userId User ID or 'me' for current user
+ * @apiHeader {String} Authorization Bearer token required
+ *
+ * @apiSuccess {String} userId User's unique identifier
+ * @apiSuccess {String} username User's display name
+ * @apiSuccess {Boolean} [isModerator] Whether user is moderator (only included for own user)
+ * @apiSuccess {String} [role] User's role (only included for own user)
+ *
+ * @apiError (403) Forbidden Invalid or missing token
+ * @apiError (404) NotFound User not found
+ */
+app.get('/api/users/:userId', verifyToken, (req, res) => {
+    const { userId } = req.params;
+    
+    // Handle 'me' request
+    if (userId === 'me') {
+        const userInfo = users.get(req.user.userId);
+        if (!userInfo) {
+            return res.status(404).json({
+                errorCode: 'USER_NOT_FOUND',
+                errorDescription: 'Current user not found'
+            });
+        }
+        return res.json(userInfo);
+    }
+
+    // Handle specific user request
+    const requestedUser = users.get(userId);
+    if (!requestedUser) {
+        return res.status(404).json({
+            errorCode: 'USER_NOT_FOUND',
+            errorDescription: 'User not found'
+        });
+    }
+
+    // Return limited info for other users
+    return res.json({
+        userId: requestedUser.userId,
+        username: requestedUser.username
+    });
+});
+
+// Add this new endpoint to handle user info requests
+/**
+ * @api {get} /api/users/:userId Get User Info
+ * @apiName GetUserInfo
+ * @apiGroup Users
+ * @apiDescription Get information about a user. Returns full info for own user, limited info for others.
+ *
+ * @apiParam {String} userId User ID or 'me' for current user
+ * @apiHeader {String} Authorization Bearer token required
+ *
+ * @apiSuccess {String} userId User's unique identifier
+ * @apiSuccess {String} username User's display name
+ * @apiSuccess {Boolean} [isModerator] Whether user is moderator (only included for own user)
+ * @apiSuccess {String} [role] User's role (only included for own user)
+ *
+ * @apiError (403) Forbidden Invalid or missing token
+ * @apiError (404) NotFound User not found
+ */
+app.get('/api/users/:userId', verifyToken, (req, res) => {
+    const { userId } = req.params;
+    
+    // Handle 'me' request
+    if (userId === 'me') {
+        const userInfo = users.get(req.user.userId);
+        if (!userInfo) {
+            return res.status(404).json({
+                errorCode: 'USER_NOT_FOUND',
+                errorDescription: 'Current user not found'
+            });
+        }
+        return res.json(userInfo);
+    }
+
+    // Handle specific user request
+    const requestedUser = users.get(userId);
+    if (!requestedUser) {
+        return res.status(404).json({
+            errorCode: 'USER_NOT_FOUND',
+            errorDescription: 'User not found'
+        });
+    }
+
+    // Return limited info for other users
+    return res.json({
+        userId: requestedUser.userId,
+        username: requestedUser.username
+    });
+});
+
+// Update leave room to clean up user info
+app.post('/api/rooms/:roomId/leave', verifyToken, (req, res) => {
+    const { roomId } = req.params;
+    const { userId } = req.user;
+
+    // Clean up user's room and session info
+    const userInfo = users.get(userId);
+    if (userInfo) {
+        delete userInfo.sessionId;
+        delete userInfo.roomId;
+    }
+
+    // Rest of leave room logic...
+});
+
+// Add cleanup when server stops
+process.on('SIGINT', () => {
+    users.clear();
+    process.exit();
+});
 
 server.listen(port, () => {
     console.log(`Server listening on http://localhost:${port}`);
