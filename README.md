@@ -53,9 +53,11 @@ You can see an example of this flow in the example included at `public/index.htm
 
 # Not yet implemented
 
-- You cannot enable/disable audio or video
-- You cannot switch inputs after a track has been published
-- Tracks are not correctly unpublished in most cases
+- ~~SFU datachannels are not implemented (and probably only make sense for file transfers)~~
+- ~~You cannot enable/disable audio or video~~
+- ~~You cannot switch inputs after a track has been published~~
+- ~~Tracks are not correctly unpublished in most cases~~
 - Screen sharing does not work
-- SFU datachannels are not implemented (and probably only make sense for file transfers)
+- Participant list (text list) does not update properly
+- Example flow to completely rebuild participant lists instead of reacting to individual track published / unpublished events (SPAs will probably need this)
 - More..
