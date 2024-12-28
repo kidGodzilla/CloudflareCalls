@@ -184,8 +184,9 @@ class CloudflareCalls {
     }
 
     /**
-     * Updates the user metadata on the server.
+     * Updates user metadata on the server
      * @private
+     * @async
      * @returns {Promise<void>}
      */
     async _updateUserMetadataOnServer() {
@@ -209,6 +210,7 @@ class CloudflareCalls {
             }
         } catch (error) {
             console.error('Error updating user metadata:', error);
+            throw error;
         }
     }
 
@@ -1223,27 +1225,6 @@ class CloudflareCalls {
     }
 
     /**
-     * Checks for errors in the result object and throws an error if any are found.
-     * @param {Object} result - The result object to check for errors.
-     * @throws {Error} If an error code is present in the result.
-     * @returns {void}
-     */
-    checkErrors(result) {
-        if (result.errorCode) {
-            throw new Error(result.errorDescription || 'Unknown error');
-        }
-    }
-
-    /**
-     * Handles incoming data messages from WebSocket.
-     * @param {MessageEvent} evt - The WebSocket message event.
-     * @returns {void}
-     */
-    handleIncomingData(evt) {
-        console.log('Received message:', evt.data);
-    }
-
-    /**
      * Unpublishes all currently published tracks
      * @async
      * @returns {Promise<void>}
@@ -1339,30 +1320,6 @@ class CloudflareCalls {
     }
 
     /**
-     * Creates a media element for a track
-     * @private
-     * @param {MediaStreamTrack} track - The media track
-     * @param {string} sessionId - The session ID of the peer
-     * @returns {HTMLElement} The created media element
-     */
-    _createMediaElement(track, sessionId) {
-        const element = document.createElement(track.kind === 'video' ? 'video' : 'audio');
-        element.autoplay = true;
-        if (track.kind === 'video') {
-            element.playsInline = true;
-        }
-        
-        // Add data attributes for easier cleanup
-        element.dataset.sessionId = sessionId;
-        element.dataset.trackId = track.id;
-        
-        const stream = new MediaStream([track]);
-        element.srcObject = stream;
-        
-        return element;
-    }
-
-    /**
      * Gets the session state
      * @async
      * @returns {Promise<Object>} The session state
@@ -1404,6 +1361,7 @@ class CloudflareCalls {
     /**
      * Updates the track status
      * @async
+     * @private
      * @param {string} trackId - The track ID
      * @param {string} kind - The track kind
      * @param {boolean} enabled - Whether the track is enabled
@@ -1431,6 +1389,10 @@ class CloudflareCalls {
             // If renegotiation is needed, handle it
             if (result.requiresImmediateRenegotiation) {
                 await this._renegotiate();
+            }
+
+            if (!result.errorCode) {
+                this._updateTrackState(trackId, enabled ? 'enabled' : 'disabled');
             }
 
             return result;
@@ -1541,6 +1503,19 @@ class CloudflareCalls {
         } catch (error) {
             console.error('Error handling WebSocket message:', error);
         }
+    }
+
+    /**
+     * Updates track state in internal tracking
+     * @private
+     * @param {string} trackName - The track name
+     * @param {string} status - The new status
+     */
+    _updateTrackState(trackName, status) {
+        if (!this.trackStates) {
+            this.trackStates = new Map();
+        }
+        this.trackStates.set(trackName, status);
     }
 }
 
