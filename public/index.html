@@ -99,6 +99,39 @@
             border: 1px solid #ccc;
             display: block; /* Ensures proper positioning of overlay */
         }
+        #rooms {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+
+        .room-item {
+            padding: 8px;
+            margin: 4px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f5f5f5;
+        }
+
+        .room-info {
+            flex-grow: 1;
+            margin-right: 10px;
+        }
+
+        .room-name {
+            font-weight: bold;
+        }
+
+        .room-metadata {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .room-actions {
+            display: flex;
+            gap: 5px;
+        }
     </style>
 </head>
 <body>
@@ -135,6 +168,11 @@
     <div id="trackStatus"></div>
 </div>
 
+<div id="rooms">
+    <h3>Available Rooms</h3>
+    <div id="roomList"></div>
+</div>
+
 <div id="participants">
     <h3>Participants</h3>
     <div id="participantList"></div>
@@ -144,10 +182,61 @@
     <h3>Data Channel Messages</h3>
 </div>
 
+<div id="connectionStatus" style="position: fixed; top: 10px; right: 10px;"></div>
+
 <!-- Adapter.js for broader WebRTC compatibility -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/webrtc-adapter/8.1.2/adapter.min.js"></script>
 
 <!-- IMPORTANT: adjust the path to your refactored CloudflareCalls library -->
+<script>
+    // Add these before the type="module" script
+    window.joinRoomById = async function(roomId) {
+        window._roomId = roomId;
+        document.getElementById('joinRoom').click();
+    }
+
+    window.updateRoomName = async function(roomId, currentName) {
+        const newName = prompt('Enter new room name:', currentName);
+        if (!newName || newName === currentName) return;
+        
+        try {
+            await window.calls.updateRoomMetadata({ name: newName });
+            await window.updateRoomList();
+        } catch (err) {
+            console.error('Error updating room name:', err);
+            alert('Error updating room name: ' + err.message);
+        }
+    }
+
+    // Also expose updateRoomList globally since we need it
+    window.updateRoomList = async function() {
+        try {
+            const rooms = await window.calls.listRooms();
+            const roomList = document.getElementById('roomList');
+            
+            roomList.innerHTML = rooms.map(room => `
+                <div class="room-item">
+                    <div class="room-info">
+                        <div class="room-name">${room.name}</div>
+                        <div class="room-metadata">
+                            Created by: ${room.metadata?.createdBy || 'unknown'}<br>
+                            Participants: ${room.participantCount}
+                        </div>
+                    </div>
+                    <div class="room-actions">
+                        <button onclick="joinRoomById('${room.roomId}')">Join</button>
+                        ${room.metadata?.createdBy === window._username ? `
+                            <button onclick="updateRoomName('${room.roomId}', '${room.name}')">Rename</button>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+        } catch (err) {
+            console.error('Error updating room list:', err);
+        }
+    }
+</script>
+
 <script type="module">
     import CloudflareCalls from './CloudflareCalls.js';
 
@@ -227,88 +316,52 @@
     });
 
     // ===== 4) Remote Track Handling =====
-    calls.onRemoteTrack(async track => {
-        console.log('New remote track:', { 
-            sessionId: track.sessionId, 
-            trackId: track.id,
-            trackName: track.trackName,
-            kind: track.kind 
-        });
-        
-        // Skip if track is invalid or missing required properties
-        if (!track.id || !track.trackName || !track.kind) {
-            console.log('Skipping invalid track:', track);
-            return;
-        }
-        
-        // Update participant list when tracks change
-        updateParticipantList();
-        
-        // Find participant info from the room
-        const participants = await calls.listParticipants();
-        console.log('Participants:', participants);
-        
-        const participant = participants.find(p => p.sessionId === track.sessionId);
-        console.log('Found participant:', participant);
-        
-        if (!participant) {
-            console.warn('Could not find participant info for session:', track.sessionId);
+    calls.onRemoteTrack(async (data) => {
+        console.log('Remote track handler received:', data);
+        const { sessionId, tracks } = data;
+
+        // Skip if this is our own session
+        if (sessionId === calls.sessionId) {
+            console.log('Skipping own tracks');
             return;
         }
 
-        // Check if this is our own session ID
-        const localContainer = document.querySelector('.participant-container[data-local="true"]');
-        if (localContainer?.getAttribute('data-participant-id') === track.sessionId) {
-            console.log('Skipping container creation for own session');
-            return;
-        }
-        
-        // Get user info for the participant
-        const userInfo = await calls.getUserInfo(participant.userId);
-        console.log('User info:', userInfo);
-        
-        // Create or find container
-        let participantContainer = document.querySelector(`[data-participant-id="${track.sessionId}"]`);
-        if (!participantContainer) {
-            participantContainer = document.createElement('div');
-            participantContainer.className = 'participant-container';
-            participantContainer.setAttribute('data-participant-id', track.sessionId);
-            videosContainer.appendChild(participantContainer);
+        // Create container for this participant if it doesn't exist
+        let container = document.querySelector(`.participant-container[data-participant-id="${sessionId}"]`);
+        if (!container) {
+            container = document.createElement('div');
+            container.className = 'participant-container';
+            container.setAttribute('data-participant-id', sessionId);
             
             // Add name overlay
             const nameOverlay = document.createElement('div');
             nameOverlay.className = 'participant-name';
-            nameOverlay.textContent = `${userInfo.username} 🔈`;
-            participantContainer.appendChild(nameOverlay);
+            
+            // Get participant info
+            const participants = await calls.listParticipants();
+            const participant = participants.find(p => p.sessionId === sessionId);
+            nameOverlay.textContent = participant?.username || 'Anonymous';
+            
+            container.appendChild(nameOverlay);
+            videosContainer.appendChild(container);
         }
 
-        // Add the media element to the container
-        if (track.kind === 'video') {
-            const videoElement = document.createElement('video');
-            videoElement.autoplay = true;
-            videoElement.playsInline = true;
-            
-            videoElement.setAttribute('data-session-id', track.sessionId);
-            videoElement.setAttribute('data-track-id', track.id);
-            videoElement.setAttribute('data-track-name', track.trackName);
-            videoElement.setAttribute('data-mid', track.mid);
-            
-            videoElement.srcObject = new MediaStream([track]);
-            participantContainer.appendChild(videoElement);
-        } else if (track.kind === 'audio') {
-            const audioElement = document.createElement('audio');
-            audioElement.autoplay = true;
-            audioElement.controls = true;
-            audioElement.style.display = 'none';
-            
-            audioElement.setAttribute('data-session-id', track.sessionId);
-            audioElement.setAttribute('data-track-id', track.id);
-            audioElement.setAttribute('data-track-name', track.trackName);
-            audioElement.setAttribute('data-mid', track.mid);
-            
-            audioElement.srcObject = new MediaStream([track]);
-            participantContainer.appendChild(audioElement); // Add to participant container instead
+        // Create video/audio elements for each track
+        if (tracks && Array.isArray(tracks)) {
+            tracks.forEach(track => {
+                const isVideo = track.kind === 'video';
+                const elem = document.createElement(isVideo ? 'video' : 'audio');
+                elem.autoplay = true;
+                elem.playsInline = true;
+                if (!isVideo) {
+                    elem.style.display = 'none';
+                }
+                elem.setAttribute('data-track-name', track.trackName);
+                container.appendChild(elem);
+            });
         }
+
+        console.log('Added remote media elements for session:', sessionId);
     });
 
     // ===== 4b) Handle Track Unpublished Events =====
@@ -422,28 +475,54 @@
         }
 
         await setupLocalPreview();
+        updateRoomList();
     });
 
     createRoomBtn.addEventListener('click', async () => {
-        window._roomId = await calls.createRoom();
-        history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
-        alert('Created room with ID: ' + _roomId);
+        const name = prompt('Enter room name:');
+        if (!name) return;
+        
+        const metadata = {
+            createdBy: window._username || 'anonymous',
+            createdAt: new Date().toISOString()
+        };
+        
+        const room = await calls.createRoom({ name, metadata });
+        window._roomId = room.roomId;
+        history.replaceState(null, '', `?room_id=${encodeURIComponent(room.roomId)}`);
+        alert(`Created room "${name}" with ID: ${room.roomId}`);
+        
+        // Refresh room list
+        updateRoomList();
     });
 
     joinRoomBtn.addEventListener('click', async () => {
-        let searchRoomId = (location.search.split('room_id=')[1]).split('&')[0];
-        if (!window._roomId && searchRoomId) window._roomId = searchRoomId;
+        // First try to get room ID from passed parameter
+        if (!window._roomId) {
+            // Then try URL
+            const searchParams = new URLSearchParams(location.search);
+            const searchRoomId = searchParams.get('room_id');
+            if (searchRoomId) window._roomId = searchRoomId;
+        }
 
-        if (!window._roomId) window._roomId = prompt('Enter Room ID to join:');
-        if (!_roomId) return;
+        // Finally prompt if we still don't have one
+        if (!window._roomId) {
+            window._roomId = prompt('Enter Room ID to join:');
+        }
+        
+        if (!window._roomId) return;  // User cancelled prompt
 
-        if (!window._username) window._username = prompt('Enter your username:');
+        if (!window._username) {
+            window._username = prompt('Enter your username:');
+            if (!window._username) return;  // User cancelled prompt
+        }
 
         previewMediaBtn.click();
 
         try {
-            await calls.joinRoom(_roomId, { username: _username });
-            console.log('Joined room:', _roomId);
+            console.log('Attempting to join room:', window._roomId);
+            await calls.joinRoom(window._roomId, { username: window._username });
+            console.log('Joined room:', window._roomId);
             
             // Get session ID after joining
             const sessionId = calls.sessionId;
@@ -458,7 +537,8 @@
             // Update participant list after joining
             await updateParticipantList();
             
-            history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
+            history.replaceState(null, '', `?room_id=${encodeURIComponent(window._roomId)}`);
+            updateRoomList();
         } catch (err) {
             console.error('Error joining room:', err);
             alert('Error joining room: ' + err.message);
@@ -480,6 +560,7 @@
         participantList.innerHTML = '';
         
         alert('Left the room.');
+        updateRoomList();
     });
 
     toggleVideoBtn.addEventListener('click', async () => {
@@ -590,45 +671,20 @@
 
     async function updateParticipantList() {
         try {
-            // Get current user info first
-            const currentUser = await calls.getUserInfo();
-            const isModerator = currentUser.isModerator;
-            
-            // Get list of participants in room
+            console.log('Calling listParticipants...');
             const participants = await calls.listParticipants();
+            console.log('Received participants in UI:', participants);
             
-            // If we're not in a room, participants will be empty
-            if (!participants || participants.length === 0) {
-                participantList.innerHTML = '';
-                return;
-            }
-            
-            participantList.innerHTML = `
-                <div class="participant">
-                    <strong>You (${currentUser.username})</strong>
-                    ${isModerator ? ' 🛡️ Moderator' : ''}
+            participantList.innerHTML = participants.map(p => `
+                <div class="participant" data-session-id="${p.sessionId}">
+                    <span>${p.username} (${p.sessionId.slice(0, 6)}...)</span>
+                    ${p.userId !== window._userId ? `
+                        <button onclick="kickParticipant('${p.sessionId}')">Kick</button>
+                    ` : ''}
                 </div>
-                ${await Promise.all(participants
-                    .filter(p => p.userId !== currentUser.userId)
-                    .map(async p => {
-                        const userInfo = await calls.getUserInfo(p.userId);
-                        return `
-                            <div class="participant">
-                                <strong>${userInfo.username}</strong>
-                                ${isModerator ? `
-                                    <button onclick="forceUnpublishParticipant('${p.sessionId}')">
-                                        Force Unpublish
-                                    </button>
-                                ` : ''}
-                            </div>
-                        `;
-                    })
-                ).then(items => items.join(''))}
-            `;
+            `).join('');
         } catch (err) {
             console.error('Error updating participant list:', err);
-            // Clear the list if there's an error (likely means we're not in a room)
-            participantList.innerHTML = '';
         }
     }
 
@@ -650,8 +706,16 @@
     }
 
     const setupLocalPreview = async () => {
-        const localContainer = document.createElement('div');
+        // Check if we already have a local container
+        let localContainer = document.querySelector('.participant-container[data-local="true"]');
+        if (localContainer) {
+            console.log('Local preview already set up');
+            return;
+        }
+
+        localContainer = document.createElement('div');
         localContainer.className = 'participant-container';
+        localContainer.setAttribute('data-local', 'true');
         
         try {
             const userInfo = await calls.getUserInfo();
@@ -698,6 +762,98 @@
     // Use generic handler for debugging or custom handling
     calls.onWebSocketMessage(msg => {
         console.log('WebSocket message received (generic):', msg);
+    });
+
+    // Add room list update function
+    async function updateRoomList() {
+        try {
+            const rooms = await calls.listRooms();
+            const roomList = document.getElementById('roomList');
+            
+            roomList.innerHTML = rooms.map(room => `
+                <div class="room-item">
+                    <div class="room-info">
+                        <div class="room-name">${room.name}</div>
+                        <div class="room-metadata">
+                            Created by: ${room.metadata?.createdBy || 'unknown'}<br>
+                            Participants: ${room.participantCount}
+                        </div>
+                    </div>
+                    <div class="room-actions">
+                        <button onclick="joinRoomById('${room.roomId}')">Join</button>
+                        ${room.metadata?.createdBy === window._username ? `
+                            <button onclick="updateRoomName('${room.roomId}', '${room.name}')">Rename</button>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+        } catch (err) {
+            console.error('Error updating room list:', err);
+        }
+    }
+
+    // Add helper functions
+    async function joinRoomById(roomId) {
+        window._roomId = roomId;
+        joinRoomBtn.click();
+    }
+
+    async function updateRoomName(roomId, currentName) {
+        const newName = prompt('Enter new room name:', currentName);
+        if (!newName || newName === currentName) return;
+        
+        try {
+            await calls.updateRoomMetadata({ name: newName });
+            updateRoomList();
+        } catch (err) {
+            console.error('Error updating room name:', err);
+            alert('Error updating room name: ' + err.message);
+        }
+    }
+
+    // Add room metadata update handler
+    calls.onRoomMetadataUpdated(payload => {
+        console.log('Room metadata updated:', payload);
+        updateRoomList();
+    });
+
+    // Add connection status monitoring
+    function updateConnectionStatus() {
+        const status = document.getElementById('connectionStatus');
+        if (!window.calls?.ws) {
+            status.textContent = '⚠️ No WebSocket';
+            status.style.color = 'red';
+            return;
+        }
+
+        switch (window.calls.ws.readyState) {
+            case WebSocket.CONNECTING:
+                status.textContent = '🔄 Connecting...';
+                status.style.color = 'orange';
+                break;
+            case WebSocket.OPEN:
+                status.textContent = '🟢 Connected';
+                status.style.color = 'green';
+                break;
+            case WebSocket.CLOSING:
+                status.textContent = '🔄 Closing...';
+                status.style.color = 'orange';
+                break;
+            case WebSocket.CLOSED:
+                status.textContent = '🔴 Disconnected';
+                status.style.color = 'red';
+                break;
+        }
+    }
+
+    // Update status every second
+    setInterval(updateConnectionStatus, 1000);
+
+    // Add more logging to participant joined handler
+    calls.onParticipantJoined(async (participant) => {
+        console.log('Participant joined:', participant);
+        await updateParticipantList();
+        updateRoomList(); // Also update room list to show new participant count
     });
 </script>
 </body>

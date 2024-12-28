@@ -56,6 +56,8 @@ class CloudflareCalls {
 
         this.midToSessionId = new Map();
         this.midToTrackName = new Map();
+
+        this._onRoomMetadataUpdatedCallback = null;
     }
 
     /**
@@ -154,6 +156,14 @@ class CloudflareCalls {
         return () => this._wsMessageHandlers.delete(callback);
     }
 
+    /**
+     * Register callback for room metadata updates
+     * @param {Function} callback Callback function
+     */
+    onRoomMetadataUpdated(callback) {
+        this._onRoomMetadataUpdatedCallback = callback;
+    }
+
     /************************************************
      * User Metadata Management
      ***********************************************/
@@ -219,16 +229,23 @@ class CloudflareCalls {
      ***********************************************/
 
     /**
-     * Creates a new room.
+     * Creates a new room with optional name and metadata.
      * @async
-     * @returns {Promise<string>} The ID of the created room.
+     * @param {Object} options Room creation options
+     * @param {string} [options.name] Room name
+     * @param {Object} [options.metadata] Room metadata
+     * @returns {Promise<Object>} Created room information
      */
-    async createRoom() {
-        const resp = await this._fetch(`${this.backendUrl}/api/rooms`, { method: 'POST' })
-            .then(r => r.json());
+    async createRoom(options = {}) {
+        const resp = await this._fetch(`${this.backendUrl}/api/rooms`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(options)
+        }).then(r => r.json());
+        
         this.roomId = resp.roomId;
         console.log('Created room', this.roomId);
-        return this.roomId;
+        return resp;
     }
 
     /**
@@ -473,47 +490,52 @@ class CloudflareCalls {
     }
 
     /**
-     * Publishes the local media tracks to the PeerConnection and server.
-     * @async
+     * Publishes tracks to the room
      * @private
+     * @async
+     * @param {MediaStreamTrack[]} tracks - Array of MediaStreamTrack objects to publish
      * @returns {Promise<void>}
      */
-    async _publishTracks() {
-        const transceivers = [];
-        for (const track of this.localStream.getTracks()) {
-            const tx = this.peerConnection.addTransceiver(track, { direction: 'sendonly' });
-            transceivers.push(tx);
+    async _publishTracks(tracks) {
+        if (!this.roomId || !this.sessionId) {
+            throw new Error('Not connected to a room');
         }
+
+        // Create transceivers for each track
+        const transceivers = tracks.map(track => {
+            return this.peerConnection.addTransceiver(track, {
+                direction: 'sendonly',
+                streams: [new MediaStream([track])]
+            });
+        });
+
+        // Create offer
         const offer = await this.peerConnection.createOffer();
-        console.log('SDP Offer:', offer.sdp);
         await this.peerConnection.setLocalDescription(offer);
 
-        const trackInfos = transceivers.map(({ sender, mid }) => ({
-            location: 'local',
-            mid,
-            trackName: sender.track.id
+        // Prepare track info for the server
+        const trackInfo = tracks.map((track, index) => ({
+            trackName: track.id,
+            kind: track.kind, // Include the track kind
+            mid: transceivers[index].mid,
+            location: 'local'
         }));
 
-        const body = {
-            offer: { sdp: offer.sdp, type: offer.type },
-            tracks: trackInfos,
-            metadata: this.userMetadata
-        };
-        const publishUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/publish`;
-        const resp = await this._fetch(publishUrl, {
+        // Send to server
+        const response = await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/publish`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        }).then(r => r.json());
+            body: JSON.stringify({
+                offer: this.peerConnection.localDescription,
+                tracks: trackInfo
+            })
+        });
 
-        if (resp.errorCode) {
-            console.error('Publish error:', resp.errorDescription);
-            return;
+        const data = await response.json();
+        if (data.sessionDescription) {
+            await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.sessionDescription));
+            tracks.forEach(track => this.publishedTracks.add(track.id));
         }
-        // The SFU's answer
-        const answer = resp.sessionDescription;
-        await this.peerConnection.setRemoteDescription(answer);
-        console.log('Publish => success. Applied SFU answer.');
     }
 
     /**
@@ -1186,10 +1208,12 @@ class CloudflareCalls {
             throw new Error('Not connected to any room.');
         }
 
-        const resp = await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/participants`)
-            .then(r => r.json());
-
-        return resp.participants || [];
+        console.log('Fetching participants for room:', this.roomId);
+        const response = await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/participants`);
+        const participants = await response.json();
+        console.log('Received participants:', participants);
+        
+        return participants;
     }
 
     /************************************************
@@ -1497,6 +1521,12 @@ class CloudflareCalls {
                     }
                     break;
 
+                case 'room-metadata-updated':
+                    if (this._onRoomMetadataUpdatedCallback) {
+                        this._onRoomMetadataUpdatedCallback(message.payload);
+                    }
+                    break;
+
                 default:
                     console.log('Unhandled message type:', message.type);
             }
@@ -1516,6 +1546,70 @@ class CloudflareCalls {
             this.trackStates = new Map();
         }
         this.trackStates.set(trackName, status);
+    }
+
+    /**
+     * Lists all available rooms.
+     * @async
+     * @returns {Promise<Array>} List of rooms
+     */
+    async listRooms() {
+        const resp = await this._fetch(`${this.backendUrl}/api/rooms`)
+            .then(r => r.json());
+        return resp.rooms;
+    }
+
+    /**
+     * Updates room metadata.
+     * @async
+     * @param {Object} updates Metadata updates
+     * @param {string} [updates.name] New room name
+     * @param {Object} [updates.metadata] New room metadata
+     * @returns {Promise<Object>} Updated room information
+     */
+    async updateRoomMetadata(updates) {
+        if (!this.roomId) {
+            throw new Error('Not connected to any room');
+        }
+
+        return await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/metadata`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates)
+        }).then(r => r.json());
+    }
+
+    /**
+     * Unpublishes a track
+     * @async
+     * @param {Object} options - Unpublish options
+     * @param {string} options.trackName - Name of the track to unpublish
+     * @param {string} options.mid - Media ID of the track
+     * @returns {Promise<void>}
+     */
+    async unpublishTrack({ trackName, mid }) {
+        if (!this.roomId || !this.sessionId) {
+            throw new Error('Not connected to a room');
+        }
+
+        // Create an empty offer for track closure
+        const sessionDescription = await this.peerConnection.createOffer({
+            offerToReceiveAudio: false,
+            offerToReceiveVideo: false
+        });
+
+        await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                trackName,
+                mid,
+                sessionDescription // Include the session description
+            })
+        });
+
+        // Update local state
+        this.publishedTracks = this.publishedTracks.filter(t => t !== trackName);
     }
 }
 
