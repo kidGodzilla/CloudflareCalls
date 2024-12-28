@@ -9,7 +9,7 @@
     "rollup": "rollup public/CloudflareCalls.js --file public/CloudflareCalls.min.js --format umd --name \"CloudflareCalls\"",
     "apidocs": "apidoc -i ./ -e \"(node_modules|public)\" -o public/docs/api",
     "docs": "jsdoc -c jsdoc.json",
-    "build": "npm run docs && mkdir -p public/docs/api && npm run apidocs",
+    "build": "npm run docs && mkdir -p public/docs/api && npm run apidocs && npm run rollup",
     "start": "node ."
   },
   "author": "James Futhey",
