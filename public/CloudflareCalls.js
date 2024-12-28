@@ -24,7 +24,7 @@ class CloudflareCalls {
         this.sessionId = null;
         this.userId = this._generateUUID();
 
-        this.userMetadata = {}; // To store user metadata
+        this.userMetadata = {};
 
         this.localStream = null;
         this.peerConnection = null;
@@ -56,6 +56,9 @@ class CloudflareCalls {
 
         this.midToSessionId = new Map();
         this.midToTrackName = new Map();
+
+        // Add new callback
+        this._onRoomMetadataUpdatedCallback = null;
     }
 
     /**
@@ -167,6 +170,14 @@ class CloudflareCalls {
     }
 
     /**
+     * Register callback for room metadata updates
+     * @param {Function} callback Callback function
+     */
+    onRoomMetadataUpdated(callback) {
+        this._onRoomMetadataUpdatedCallback = callback;
+    }
+
+    /**
      * Sets the user metadata and updates it on the server.
      * @param {Object} metadata - The metadata to associate with the user.
      */
@@ -196,7 +207,7 @@ class CloudflareCalls {
         }
 
         try {
-            const updateUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/metadata`;
+            const updateUrl = `${this.backendUrl}/api/rooms/${this.roomId}/metadata`;
             const response = await this._fetch(updateUrl, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -219,16 +230,25 @@ class CloudflareCalls {
      ***********************************************/
 
     /**
-     * Creates a new room.
+     * Creates a new room with optional metadata.
      * @async
-     * @returns {Promise<string>} The ID of the created room.
+     * @param {Object} options Room creation options
+     * @param {string} [options.name] Room name
+     * @param {Object} [options.metadata] Room metadata
+     * @returns {Promise<Object>} Created room information including roomId, name, metadata, etc.
      */
-    async createRoom() {
-        const resp = await this._fetch(`${this.backendUrl}/api/rooms`, { method: 'POST' })
-            .then(r => r.json());
+    async createRoom(options = {}) {
+        const resp = await this._fetch(`${this.backendUrl}/api/rooms`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(options)
+        }).then(r => r.json());
+        
+        // Store the roomId
         this.roomId = resp.roomId;
-        console.log('Created room', this.roomId);
-        return this.roomId;
+        
+        // Return the full room object
+        return resp;
     }
 
     /**
@@ -1497,6 +1517,12 @@ class CloudflareCalls {
                     }
                     break;
 
+                case 'room-metadata-updated':
+                    if (this._onRoomMetadataUpdatedCallback) {
+                        this._onRoomMetadataUpdatedCallback(message.payload);
+                    }
+                    break;
+
                 default:
                     console.log('Unhandled message type:', message.type);
             }
@@ -1516,6 +1542,61 @@ class CloudflareCalls {
             this.trackStates = new Map();
         }
         this.trackStates.set(trackName, status);
+    }
+
+    /**
+     * Lists all available rooms.
+     * @async
+     * @returns {Promise<Array>} List of rooms
+     */
+    async listRooms() {
+        const resp = await this._fetch(`${this.backendUrl}/api/rooms`)
+            .then(r => r.json());
+        return resp.rooms;
+    }
+
+    /**
+     * Updates room metadata.
+     * @async
+     * @param {Object} updates Metadata updates
+     * @param {string} [updates.name] New room name
+     * @param {Object} [updates.metadata] New room metadata
+     * @returns {Promise<Object>} Updated room information
+     */
+    async updateRoomMetadata(updates) {
+        if (!this.roomId) {
+            throw new Error('Not connected to any room');
+        }
+
+        return await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/metadata`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates)
+        }).then(r => r.json());
+    }
+
+    /**
+     * Sends a data message to all participants in the current room
+     * @async
+     * @param {*} data - The data to send
+     */
+    async sendDataToAll(data) {
+        if (!this.roomId || !this.sessionId) {
+            throw new Error('Must be in a room to send data');
+        }
+
+        // Send via WebSocket instead of HTTP
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+                type: 'data-message',
+                payload: {
+                    from: this.sessionId,
+                    message: data
+                }
+            }));
+        } else {
+            throw new Error('WebSocket connection not available');
+        }
     }
 }
 

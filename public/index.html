@@ -99,6 +99,41 @@
             border: 1px solid #ccc;
             display: block; /* Ensures proper positioning of overlay */
         }
+
+        /* Rooms box */
+        #rooms {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+
+        .room-item {
+            padding: 8px;
+            margin: 4px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f5f5f5;
+        }
+
+        .room-info {
+            flex-grow: 1;
+            margin-right: 10px;
+        }
+
+        .room-name {
+            font-weight: bold;
+        }
+
+        .room-metadata {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .room-actions {
+            display: flex;
+            gap: 5px;
+        }
     </style>
 </head>
 <body>
@@ -135,6 +170,11 @@
     <div id="trackStatus"></div>
 </div>
 
+<div id="rooms">
+    <h3>Available Rooms</h3>
+    <div id="roomList"></div>
+</div>
+
 <div id="participants">
     <h3>Participants</h3>
     <div id="participantList"></div>
@@ -143,6 +183,8 @@
 <div id="dataChannelMessages">
     <h3>Data Channel Messages</h3>
 </div>
+
+<div id="connectionStatus" style="position: fixed; top: 10px; right: 10px;"></div>
 
 <!-- Adapter.js for broader WebRTC compatibility -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/webrtc-adapter/8.1.2/adapter.min.js"></script>
@@ -351,16 +393,6 @@
         dataChannelMessages.appendChild(p);
     });
 
-    // calls.onDataMessageToParticipant((msg) => {
-    //     // If your library’s logic calls this for per-participant messages:
-    //     console.log('onDataMessageToParticipant', msg);
-    //     if (msg.to === calls.userId) {
-    //         const p = document.createElement('p');
-    //         p.textContent = 'Private Message Received: ' + JSON.stringify(msg);
-    //         dataChannelMessages.appendChild(p);
-    //     }
-    // });
-
     // ===== 6) Participants =====
     calls.onParticipantJoined(async (participant) => {
         console.log('Participant joined:', participant);
@@ -368,6 +400,7 @@
         // Add a small delay to ensure all backend state is updated
         setTimeout(async () => {
             await updateParticipantList();
+            await updateRoomList();
         }, 100);
 
         // Just handle data channel subscription
@@ -403,31 +436,59 @@
 
     // ===== 7) Button handlers =====
     acquireTokenBtn.addEventListener('click', async () => {
-        window._username = prompt('Enter your username:');
+        try {
+            const username = window._username || prompt('Enter username:');
+            if (!username) return;
+            window._username = username;
 
-        const response = await fetch('/auth/token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: _username }),
-        });
-        const { token } = await response.json();
-        calls.setToken(token);
+            const response = await fetch('/auth/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username })
+            });
+            const { token } = await response.json();
+            
+            // Set the token in the library
+            calls.setToken(token);
+            
+            // Update room list after authentication
+            await updateRoomList();
 
-        // Show moderator status
-        const userInfo = calls.getUserInfo();
-        if (userInfo?.isModerator) {
-            alert('Token acquired and stored. You have moderator privileges.');
-        } else {
-            alert('Token acquired and stored.');
+            setupLocalPreview();
+
+            acquireTokenBtn.textContent = 'Authenticated ✓';
+            acquireTokenBtn.disabled = true;
+        } catch (err) {
+            console.error('Auth error:', err);
+            alert('Auth error: ' + err.message);
         }
-
-        await setupLocalPreview();
     });
 
     createRoomBtn.addEventListener('click', async () => {
-        window._roomId = await calls.createRoom();
-        history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
-        alert('Created room with ID: ' + _roomId);
+        try {
+            const roomName = prompt('Enter room name:') || 'Unnamed Room';
+            const room = await calls.createRoom({
+                name: roomName,
+                metadata: {
+                    createdBy: window._username
+                }
+            });
+            console.log('Created room:', room, room.roomId);
+
+            history.replaceState(null, '', `?room_id=${encodeURIComponent(room.roomId)}`);
+            
+            // Join the room using the roomId from the response
+            await calls.joinRoom(room.roomId);
+            console.log('Joined room:', calls.roomId);
+
+            previewMediaBtn.click();
+            
+            // Update UI
+            await updateRoomList();
+        } catch (err) {
+            console.error('Error creating/joining room:', err);
+            alert('Error: ' + err.message);
+        }
     });
 
     joinRoomBtn.addEventListener('click', async () => {
@@ -455,8 +516,9 @@
                 localContainer.setAttribute('data-participant-id', sessionId);
             }
             
-            // Update participant list after joining
+            // Update participant list & room list after joining
             await updateParticipantList();
+            await updateRoomList();
             
             history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
         } catch (err) {
@@ -478,6 +540,9 @@
         
         // Clear the participant list when we leave
         participantList.innerHTML = '';
+        
+        // Update room list after leaving
+        await updateRoomList();
         
         alert('Left the room.');
     });
@@ -652,6 +717,17 @@
     const setupLocalPreview = async () => {
         const localContainer = document.createElement('div');
         localContainer.className = 'participant-container';
+        localContainer.setAttribute('data-participant-id', calls.sessionId);
+
+        try {
+            const previewStream = await calls.previewMedia({
+                audioDeviceId: audioInputSelect.value,
+                videoDeviceId: videoInputSelect.value
+            }, localVideo);
+            console.log('Preview successful.');
+        } catch (err) {
+            alert('Error previewing media: ' + err.message);
+        }
         
         try {
             const userInfo = await calls.getUserInfo();
@@ -680,11 +756,13 @@
                 .replace(/ 🔈| 🔇/g, '')
                 .replace(/ \(you\)/g, '');
             
-            // Add back (you) only if it's the local user
-            const isLocal = nameOverlay.hasAttribute('data-local');
+            // Add back (you) if it's the local user
+            const isLocal = sessionId === calls.sessionId;
             nameOverlay.textContent = `${baseName}${isLocal ? ' (you)' : ''} ${enabled ? '🔈' : '🔇'}`;
             console.log('Updated audio status:', { sessionId, enabled }, nameOverlay.textContent);
-        } else console.log('No name overlay found for session:', sessionId);
+        } else {
+            console.log('No name overlay found for session:', sessionId);
+        }
     }
 
     // Use specific handlers for most cases
@@ -698,6 +776,65 @@
     // Use generic handler for debugging or custom handling
     calls.onWebSocketMessage(msg => {
         console.log('WebSocket message received (generic):', msg);
+    });
+
+    // Add connection status monitoring
+    function updateConnectionStatus() {
+        const status = document.getElementById('connectionStatus');
+        if (!window.calls?.ws) {
+            status.textContent = '⚠️ No WebSocket';
+            status.style.color = 'red';
+            return;
+        }
+
+        switch (window.calls.ws.readyState) {
+            case WebSocket.CONNECTING:
+                status.textContent = '🔄 Connecting...';
+                status.style.color = 'orange';
+                break;
+            case WebSocket.OPEN:
+                status.textContent = '🟢 Connected';
+                status.style.color = 'green';
+                break;
+            case WebSocket.CLOSING:
+                status.textContent = '🔄 Closing...';
+                status.style.color = 'orange';
+                break;
+            case WebSocket.CLOSED:
+                status.textContent = '🔴 Disconnected';
+                status.style.color = 'red';
+                break;
+        }
+    }
+
+    // Update status every second
+    setInterval(updateConnectionStatus, 1000);
+
+    // Add room list UI updates
+    async function updateRoomList() {
+        const roomList = document.getElementById('roomList');
+        const rooms = await calls.listRooms();
+        
+        roomList.innerHTML = rooms.map(room => `
+            <div class="room-item">
+                <div class="room-info">
+                    <div class="room-name">${room.name || 'Unnamed Room'}</div>
+                    <div class="room-metadata">
+                        Created by: ${room.metadata?.createdBy || 'Unknown'}
+                        · ${room.participantCount} participant(s)
+                    </div>
+                </div>
+                <div class="room-actions">
+                    <button onclick="joinRoomById('${room.roomId}')">Join</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // Add metadata update handler
+    calls.onRoomMetadataUpdated(async (payload) => {
+        console.log('Room metadata updated:', payload);
+        await updateRoomList();  // Refresh room list
     });
 </script>
 </body>

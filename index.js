@@ -86,12 +86,23 @@ app.post('/auth/token', (req, res) => {
 /**
  * @type {Object.<string, Array<Room>>}
  */
-const rooms = {};
+const rooms = new Map();  // Using Map instead of plain object for better key handling
 
 const wsConnections = {};
 
 // Add this near the top with other in-memory storage
 const users = new Map(); // Store user info
+
+// Helper function to serialize room data
+function serializeRoom(roomId, roomData) {
+    return {
+        roomId,
+        name: roomData.name || '',
+        metadata: roomData.metadata || {},
+        participantCount: roomData.participants.length,
+        createdAt: roomData.createdAt
+    };
+}
 
 /* ------------------------------------------------------------------
    Basic endpoints
@@ -107,8 +118,16 @@ const users = new Map(); // Store user info
  */
 app.post('/api/rooms', verifyToken, (req, res) => {
     const roomId = crypto.randomUUID();
-    rooms[roomId] = [];
-    res.json({ roomId });
+    const { name, metadata } = req.body;
+    
+    rooms.set(roomId, {
+        name: name || '',
+        metadata: metadata || {},
+        participants: [],
+        createdAt: Date.now()
+    });
+    
+    res.json(serializeRoom(roomId, rooms.get(roomId)));
 });
 
 /**
@@ -121,7 +140,14 @@ app.post('/api/rooms', verifyToken, (req, res) => {
  */
 if (process.env.NODE_ENV === 'development') {
     app.get('/inspect-rooms', (req, res) => {
-        res.json(rooms);
+        const debug = {
+            rooms: Object.fromEntries(rooms),
+            roomCount: rooms.size,
+            users: Array.from(users.entries()),
+            wsConnections: Object.keys(wsConnections)
+        };
+
+        res.json(debug);
     });
 }
 
@@ -142,11 +168,12 @@ app.post('/api/rooms/:roomId/join', verifyToken, async (req, res) => {
     const { roomId } = req.params;
     const { userId } = req.user;
 
-    if (!rooms[roomId]) {
+    if (!rooms.has(roomId)) {
         return res.status(404).json({ error: 'Room not found' });
     }
 
-    // Create Cloudflare session...
+    const room = rooms.get(roomId);
+    
     const response = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/new`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${CLOUDFLARE_APP_SECRET}` }
@@ -163,16 +190,10 @@ app.post('/api/rooms/:roomId/join', verifyToken, async (req, res) => {
         publishedTracks: []
     };
 
-    // Update user info with sessionId
-    const userInfo = users.get(userId);
-    if (userInfo) {
-        userInfo.sessionId = sessionResponse.sessionId;
-        userInfo.roomId = roomId;
-    }
+    room.participants.push(participant);
+    rooms.set(roomId, room);
 
-    rooms[roomId].push(participant);
-
-    const otherParticipants = rooms[roomId]
+    const otherParticipants = room.participants
         .filter(p => p.userId !== userId)
         .map(p => ({
             userId: p.userId,
@@ -212,8 +233,12 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
     const { roomId, sessionId } = req.params;
     const { offer, tracks } = req.body;
 
-    const participants = rooms[roomId] || [];
-    const participant = participants.find(p => p.sessionId === sessionId);
+    const room = rooms.get(roomId);
+    if (!room) {
+        return res.status(404).json({ error: 'Room not found' });
+    }
+
+    const participant = room.participants.find(p => p.sessionId === sessionId);
     if (!participant) {
         return res.status(404).json({ error: 'Session not found in this room' });
     }
@@ -225,6 +250,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
         }
     }
 
+    rooms.set(roomId, room);
     // Now call Cloudflare to finalize the push
     const cfResp = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/new`, {
         method: 'POST',
@@ -314,11 +340,10 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
         console.log('Cloudflare API response:', data);
 
         // Update local state and broadcast
-        const participants = rooms[roomId] || [];
-        const participant = participants.find(p => p.sessionId === sessionId);
-        if (participant) {
-            participant.publishedTracks = participant.publishedTracks.filter(t => t !== trackName);
-            console.log('Updated participant tracks:', participant.publishedTracks);
+        const room = rooms.get(roomId);
+        if (room) {
+            room.participants = room.participants.filter(p => p.sessionId !== sessionId);
+            console.log('Updated participants:', room.participants);
         }
 
         broadcastToRoom(roomId, {
@@ -354,8 +379,12 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/pull', verifyToken, async (req,
     const { roomId, sessionId } = req.params;
     const { remoteSessionId, trackName } = req.body;
 
-    const participants = rooms[roomId] || [];
-    const participant = participants.find(p => p.sessionId === sessionId);
+    const room = rooms.get(roomId);
+    if (!room) {
+        return res.status(404).json({ error: 'Room not found' });
+    }
+
+    const participant = room.participants.find(p => p.sessionId === sessionId);
     if (!participant) {
         return res.status(404).json({ error: 'Session not found in this room' });
     }
@@ -449,8 +478,12 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
     const { roomId, sessionId } = req.params;
     const { offer, tracks } = req.body;
 
-    const participants = rooms[roomId] || [];
-    const participant = participants.find(p => p.sessionId === sessionId);
+    const room = rooms.get(roomId);
+    if (!room) {
+        return res.status(404).json({ error: 'Room not found' });
+    }
+
+    const participant = room.participants.find(p => p.sessionId === sessionId);
     if (!participant) {
         return res.status(404).json({ error: 'Session not found in this room' });
     }
@@ -462,6 +495,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
         }
     }
 
+    rooms.set(roomId, room);
     // Now call Cloudflare to finalize the push
     const cfResp = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/new`, {
         method: 'POST',
@@ -509,10 +543,9 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/datachannels/new', verifyToken,
     const { dataChannels } = req.body;
 
     // Check that this room and session exist in memory
-    const participants = rooms[roomId] || [];
-    const participant = participants.find(p => p.sessionId === sessionId);
-    if (!participant) {
-        return res.status(404).json({ error: 'Session not found in this room' });
+    const room = rooms.get(roomId);
+    if (!room) {
+        return res.status(404).json({ error: 'Room not found' });
     }
 
     // Forward this datachannels request to Cloudflare
@@ -563,18 +596,13 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/datachannels/new', verifyToken,
  */
 app.get('/api/rooms/:roomId/participants', verifyToken, (req, res) => {
     const { roomId } = req.params;
-    const room = rooms[roomId];
-    if (!room) {
+    
+    if (!rooms.has(roomId)) {
         return res.status(404).json({ error: 'Room not found' });
     }
-
-    const participants = room.map(participant => ({
-        userId: participant.userId,
-        sessionId: participant.sessionId,
-        publishedTracks: participant.publishedTracks
-    }));
-
-    res.json({ participants });
+    
+    const room = rooms.get(roomId);
+    res.json({ participants: room.participants });
 });
 
 /**
@@ -597,17 +625,18 @@ app.get('/api/rooms/:roomId/participants', verifyToken, (req, res) => {
 app.get('/api/rooms/:roomId/participant/:sessionId/tracks', verifyToken, async (req, res) => {
     const { sessionId, roomId } = req.params;
 
-    if (!rooms[roomId]) {
+    if (!rooms.has(roomId)) {
         return res.status(404).json({ error: 'Room not found' });
     }
 
-    const participants = rooms[roomId].filter(x => x.sessionId === sessionId);
+    const room = rooms.get(roomId);
+    const participant = room.participants.find(p => p.sessionId === sessionId);
 
-    if (!participants.length) {
+    if (!participant) {
         return res.status(404).json({ error: 'Participant not found' });
     }
 
-    res.json(participants[0].publishedTracks);
+    res.json(participant.publishedTracks);
 });
 
 /* ------------------------------------------------------------------
@@ -727,41 +756,21 @@ function handleDataMessage(ws, payload) {
         return;
     }
 
-    let targetUserIds = [];
-
-    if (to === 'all') {
-        // Broadcast to all participants in the room except the sender
-        const roomId = getRoomIdByUserId(from);
-        if (!roomId) {
-            console.warn(`Room not found for userId: ${from}`);
-            return;
-        }
-        targetUserIds = Object.keys(wsConnections[roomId] || {}).filter(userId => userId !== from);
-        broadcastToRoom(roomId, {
-            type: 'data-message',
-            payload: {
-                from,
-                to: 'all',
-                message
-            }
-        }, from);
-    } else {
-        // Send to a specific participant
-        const targetWs = getWebSocketByUserId(to);
-        if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-            targetWs.send(JSON.stringify({
-                type: 'data-message',
-                payload: {
-                    from,
-                    to,
-                    message
-                }
-            }));
-            console.log(`Data message from ${from} to ${to}:`, message);
-        } else {
-            console.warn(`Target userId ${to} is not connected.`);
-        }
+    // Get room ID from the session ID
+    const roomId = getRoomIdBySessionId(from);
+    if (!roomId) {
+        console.warn(`Room not found for session: ${from}`);
+        return;
     }
+
+    // Broadcast to all participants in the room except the sender
+    broadcastToRoom(roomId, {
+        type: 'data-message',
+        payload: {
+            from,
+            data: message
+        }
+    }, from);
 }
 
 /**
@@ -771,8 +780,8 @@ function handleDataMessage(ws, payload) {
  * @returns {string|null} - The room ID if found, otherwise null.
  */
 function getRoomIdByUserId(userId) {
-    for (const [roomId, users] of Object.entries(wsConnections)) {
-        if (users[userId]) {
+    for (const [roomId, room] of rooms.entries()) {
+        if (room.participants.find(p => p.userId === userId)) {
             return roomId;
         }
     }
@@ -853,6 +862,8 @@ function handleWSDisconnect(ws) {
  */
 function broadcastToRoom(roomId, message, excludeUserId = null) {
     console.log('Broadcasting to room:', { roomId, message, excludeUserId });
+    if (!rooms.has(roomId)) return;
+
     if (!wsConnections[roomId]) return;
     for (const [userId, ws] of Object.entries(wsConnections[roomId])) {
         if (userId === excludeUserId) continue;
@@ -1012,7 +1023,17 @@ app.post('/api/rooms/:roomId/leave', verifyToken, (req, res) => {
         delete userInfo.roomId;
     }
 
-    // Rest of leave room logic...
+    const room = rooms.get(roomId);
+    if (room) {
+        room.participants = room.participants.filter(p => p.userId !== userId);
+        if (room.participants.length === 0) {
+            rooms.delete(roomId);  // Remove empty rooms
+        } else {
+            rooms.set(roomId, room);
+        }
+    }
+
+    res.json({ success: true });
 });
 
 // Add cleanup when server stops
@@ -1076,3 +1097,56 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/track-status', verifyToken, asy
         });
     }
 });
+
+// Add list rooms endpoint
+app.get('/api/rooms', verifyToken, (req, res) => {
+    const roomList = Array.from(rooms.entries()).map(([roomId, room]) => 
+        serializeRoom(roomId, room)
+    );
+    
+    res.json({ rooms: roomList });
+});
+
+// Add update metadata endpoint
+app.put('/api/rooms/:roomId/metadata', verifyToken, (req, res) => {
+    const { roomId } = req.params;
+    const { name, metadata } = req.body;
+    
+    if (!rooms.has(roomId)) {
+        return res.status(404).json({ error: 'Room not found' });
+    }
+    
+    const room = rooms.get(roomId);
+    
+    if (name !== undefined) {
+        room.name = name;
+    }
+    
+    if (metadata !== undefined) {
+        room.metadata = { ...room.metadata, ...metadata };
+    }
+    
+    rooms.set(roomId, room);
+    
+    // Notify room participants about the update
+    broadcastToRoom(roomId, {
+        type: 'room-metadata-updated',
+        payload: {
+            roomId,
+            name: room.name,
+            metadata: room.metadata
+        }
+    });
+    
+    res.json(serializeRoom(roomId, room));
+});
+
+// Update getRoomIdByUserId to use sessionId instead
+function getRoomIdBySessionId(sessionId) {
+    for (const [roomId, room] of rooms.entries()) {
+        if (room.participants.find(p => p.sessionId === sessionId)) {
+            return roomId;
+        }
+    }
+    return null;
+}
