@@ -370,6 +370,12 @@
         await calls.unpublishAllTracks();
         alert('Unpublished all tracks');
     });
+
+    window.onbeforeunload = async function(e) {
+        e.preventDefault();
+        await calls.unpublishAllTracks();
+        return 'Leaving room..';
+    }
 </script>
 </body>
 </html>
