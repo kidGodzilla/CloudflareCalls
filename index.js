@@ -1024,3 +1024,55 @@ process.on('SIGINT', () => {
 server.listen(port, () => {
     console.log(`Server listening on http://localhost:${port}`);
 });
+
+/**
+ * @api {post} /api/rooms/:roomId/sessions/:sessionId/track-status Update Track Status
+ * @apiName UpdateTrackStatus
+ * @apiGroup Sessions
+ * @apiDescription Updates the enabled/disabled status of a track
+ *
+ * @apiParam {String} roomId The ID of the room
+ * @apiParam {String} sessionId The session ID
+ * @apiBody {String} trackId The track ID
+ * @apiBody {String} kind The track kind ('audio' or 'video')
+ * @apiBody {Boolean} enabled Whether the track should be enabled
+ * @apiBody {Boolean} [force] Whether to force the status change
+ *
+ * @apiSuccess {Object} result Operation result
+ * @apiError (403) Forbidden Not authorized to update track status
+ */
+app.post('/api/rooms/:roomId/sessions/:sessionId/track-status', verifyToken, async (req, res) => {
+    try {
+        const { roomId, sessionId } = req.params;
+        const { trackId, kind, enabled, force } = req.body;
+
+        // If trying to force change someone else's track
+        if (force && sessionId !== req.user.sessionId) {
+            if (!req.user.isModerator) {
+                return res.status(403).json({
+                    errorCode: 'NOT_AUTHORIZED',
+                    errorDescription: 'Only moderators can force change other participants\' tracks'
+                });
+            }
+        }
+
+        // Notify other participants about the track status change
+        broadcastToRoom(roomId, {
+            type: 'track-status-changed',
+            payload: {
+                sessionId,
+                trackId,
+                kind,
+                enabled
+            }
+        }, sessionId);
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error updating track status:', error);
+        res.status(500).json({
+            errorCode: 'UPDATE_TRACK_STATUS_ERROR',
+            errorDescription: error.message
+        });
+    }
+});

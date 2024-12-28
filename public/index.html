@@ -20,12 +20,22 @@
             display: flex;
             flex-wrap: wrap;
         }
+        #videos audio {
+            /* Comment out to show audio and see how things work or debug */
+            display: none;
+        }
         video, audio {
             width: 300px;
             height: 225px;
             background-color: black;
-            margin: 5px;
+            /* margin: 5px; */
             border: 1px solid #ccc;
+        }
+        .participant-container {
+            width: 300px;
+            height: 225px;
+            position: relative;
+            margin: 5px;
         }
         #controls {
             margin-top: 10px;
@@ -63,6 +73,31 @@
             border: none;
             border-radius: 4px;
             cursor: pointer;
+        }
+        .participant-container {
+            position: relative;
+            margin: 5px;
+        }
+        
+        .participant-name {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+            z-index: 1;
+        }
+        
+        /* Update video styles */
+        video {
+            width: 300px;
+            height: 225px;
+            background-color: black;
+            border: 1px solid #ccc;
+            display: block; /* Ensures proper positioning of overlay */
         }
     </style>
 </head>
@@ -192,7 +227,7 @@
     });
 
     // ===== 4) Remote Track Handling =====
-    calls.onRemoteTrack(track => {
+    calls.onRemoteTrack(async track => {
         console.log('New remote track:', { 
             sessionId: track.sessionId, 
             trackId: track.id,
@@ -200,32 +235,80 @@
             kind: track.kind 
         });
         
+        // Skip if track is invalid or missing required properties
+        if (!track.id || !track.trackName || !track.kind) {
+            console.log('Skipping invalid track:', track);
+            return;
+        }
+        
         // Update participant list when tracks change
         updateParticipantList();
         
-        // Find or create participant container
+        // Find participant info from the room
+        const participants = await calls.listParticipants();
+        console.log('Participants:', participants);
+        
+        const participant = participants.find(p => p.sessionId === track.sessionId);
+        console.log('Found participant:', participant);
+        
+        if (!participant) {
+            console.warn('Could not find participant info for session:', track.sessionId);
+            return;
+        }
+
+        // Check if this is our own session ID
+        const localContainer = document.querySelector('.participant-container[data-local="true"]');
+        if (localContainer?.getAttribute('data-participant-id') === track.sessionId) {
+            console.log('Skipping container creation for own session');
+            return;
+        }
+        
+        // Get user info for the participant
+        const userInfo = await calls.getUserInfo(participant.userId);
+        console.log('User info:', userInfo);
+        
+        // Create or find container
         let participantContainer = document.querySelector(`[data-participant-id="${track.sessionId}"]`);
         if (!participantContainer) {
             participantContainer = document.createElement('div');
+            participantContainer.className = 'participant-container';
             participantContainer.setAttribute('data-participant-id', track.sessionId);
             videosContainer.appendChild(participantContainer);
+            
+            // Add name overlay
+            const nameOverlay = document.createElement('div');
+            nameOverlay.className = 'participant-name';
+            nameOverlay.textContent = `${userInfo.username} 🔈`;
+            participantContainer.appendChild(nameOverlay);
         }
 
-        const mediaElement = track.kind === 'video' 
-            ? document.createElement('video')
-            : document.createElement('audio');
-
-        mediaElement.autoplay = true;
-        mediaElement.playsInline = true;
-        if (track.kind === 'audio') mediaElement.controls = true;
-        
-        mediaElement.setAttribute('data-session-id', track.sessionId);
-        mediaElement.setAttribute('data-track-id', track.id); // WebRTC track ID
-        mediaElement.setAttribute('data-track-name', track.trackName); // Application track name
-        mediaElement.setAttribute('data-mid', track.mid);
-        
-        mediaElement.srcObject = new MediaStream([track]);
-        participantContainer.appendChild(mediaElement);
+        // Add the media element to the container
+        if (track.kind === 'video') {
+            const videoElement = document.createElement('video');
+            videoElement.autoplay = true;
+            videoElement.playsInline = true;
+            
+            videoElement.setAttribute('data-session-id', track.sessionId);
+            videoElement.setAttribute('data-track-id', track.id);
+            videoElement.setAttribute('data-track-name', track.trackName);
+            videoElement.setAttribute('data-mid', track.mid);
+            
+            videoElement.srcObject = new MediaStream([track]);
+            participantContainer.appendChild(videoElement);
+        } else if (track.kind === 'audio') {
+            const audioElement = document.createElement('audio');
+            audioElement.autoplay = true;
+            audioElement.controls = true;
+            audioElement.style.display = 'none';
+            
+            audioElement.setAttribute('data-session-id', track.sessionId);
+            audioElement.setAttribute('data-track-id', track.id);
+            audioElement.setAttribute('data-track-name', track.trackName);
+            audioElement.setAttribute('data-mid', track.mid);
+            
+            audioElement.srcObject = new MediaStream([track]);
+            participantContainer.appendChild(audioElement); // Add to participant container instead
+        }
     });
 
     // ===== 4b) Handle Track Unpublished Events =====
@@ -235,7 +318,7 @@
         // Update participant list when tracks are unpublished
         updateParticipantList();
         
-        // First try exact match with track ID
+        // Find and remove the media element
         let mediaElement = document.querySelector(`[data-session-id="${sessionId}"][data-track-name="${trackName}"]`);
         
         if (!mediaElement) {
@@ -249,11 +332,14 @@
         }
         mediaElement.remove();
         
-        // Check if participant container is empty
+        // Check if participant container is empty (no video/audio elements)
         const participantContainer = document.querySelector(`[data-participant-id="${sessionId}"]`);
-        if (participantContainer && !participantContainer.querySelector('video, audio')) {
-            console.log('Removing empty participant container:', sessionId);
-            participantContainer.remove();
+        if (participantContainer) {
+            const hasMediaElements = participantContainer.querySelector('video, audio');
+            if (!hasMediaElements) {
+                console.log('Removing empty participant container:', sessionId);
+                participantContainer.remove();
+            }
         }
     });
 
@@ -283,16 +369,8 @@
         setTimeout(async () => {
             await updateParticipantList();
         }, 100);
-        
-        // Create participant container for future tracks
-        let participantContainer = document.querySelector(`[data-participant-id="${participant.sessionId}"]`);
-        if (!participantContainer) {
-            participantContainer = document.createElement('div');
-            participantContainer.setAttribute('data-participant-id', participant.sessionId);
-            videosContainer.appendChild(participantContainer);
-        }
 
-        // Try to subscribe to their data channel
+        // Just handle data channel subscription
         try {
             await calls.subscribeDataChannel(participant.sessionId, 'chat');
             console.log('Subscribed to participant\'s "chat" channel:', participant.sessionId);
@@ -303,6 +381,23 @@
 
     calls.onParticipantLeft(async (sessionId) => {
         console.log('Participant left:', sessionId);
+        
+        // Remove participant's container
+        const container = document.querySelector(`.participant-container[data-participant-id="${sessionId}"]`);
+        if (container) {
+            // Stop all tracks in the container
+            container.querySelectorAll('video, audio').forEach(media => {
+                if (media.srcObject) {
+                    media.srcObject.getTracks().forEach(track => track.stop());
+                }
+            });
+            container.remove();
+        }
+        
+        // Also check for any stray audio elements
+        document.querySelectorAll(`audio[data-session-id="${sessionId}"]`)
+            .forEach(audio => audio.remove());
+        
         await updateParticipantList();
     });
 
@@ -325,6 +420,8 @@
         } else {
             alert('Token acquired and stored.');
         }
+
+        await setupLocalPreview();
     });
 
     createRoomBtn.addEventListener('click', async () => {
@@ -348,16 +445,20 @@
             await calls.joinRoom(_roomId, { username: _username });
             console.log('Joined room:', _roomId);
             
+            // Get session ID after joining
+            const sessionId = calls.sessionId;
+            console.log('Session ID:', sessionId);
+            
+            // Set the session ID on our local container
+            const localContainer = document.querySelector('.participant-container');
+            if (localContainer) {
+                localContainer.setAttribute('data-participant-id', sessionId);
+            }
+            
             // Update participant list after joining
             await updateParticipantList();
             
             history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
-
-            alert('Successfully joined room: ' + _roomId);
-
-            // (Optional) publish a "chat" data channel for others to subscribe
-            // await calls.publishDataChannel('chat');
-            console.log('Published local "chat" data channel.');
         } catch (err) {
             console.error('Error joining room:', err);
             alert('Error joining room: ' + err.message);
@@ -365,12 +466,20 @@
     });
 
     leaveRoomBtn.addEventListener('click', async () => {
+        await calls.unpublishAllTracks();
         await calls.leaveRoom();
+        
+        // Clean up all remote participant containers
+        document.querySelectorAll('.participant-container:not([data-local="true"])')
+            .forEach(container => container.remove());
+        
+        // Clean up remote audio elements that might be outside containers
+        document.querySelectorAll('#videos audio').forEach(audio => audio.remove());
+        
+        // Clear the participant list when we leave
+        participantList.innerHTML = '';
+        
         alert('Left the room.');
-
-        // Clean up remote media
-        document.querySelectorAll('#videos video:not(#localVideo), #videos audio')
-            .forEach(media => media.remove());
     });
 
     toggleVideoBtn.addEventListener('click', async () => {
@@ -399,6 +508,17 @@
             audioTrack.enabled = !isEnabled;
             calls.toggleMedia({ audio: !isEnabled, video: null });
             toggleAudioBtn.textContent = isEnabled ? 'Enable Audio' : 'Disable Audio';
+            
+            // Update local audio status (fixed logic)
+            const localNameOverlay = document.querySelector('[data-local="true"]');
+            if (localNameOverlay) {
+                // Remove any existing status icons and (you) before updating
+                const baseName = localNameOverlay.textContent
+                    .replace(/ 🔈| 🔇/g, '')
+                    .replace(/ \(you\)/g, '');
+                
+                localNameOverlay.textContent = `${baseName} (you) ${isEnabled ? '🔇' : '🔈'}`;
+            }
         }
     });
 
@@ -477,6 +597,12 @@
             // Get list of participants in room
             const participants = await calls.listParticipants();
             
+            // If we're not in a room, participants will be empty
+            if (!participants || participants.length === 0) {
+                participantList.innerHTML = '';
+                return;
+            }
+            
             participantList.innerHTML = `
                 <div class="participant">
                     <strong>You (${currentUser.username})</strong>
@@ -501,6 +627,8 @@
             `;
         } catch (err) {
             console.error('Error updating participant list:', err);
+            // Clear the list if there's an error (likely means we're not in a room)
+            participantList.innerHTML = '';
         }
     }
 
@@ -520,6 +648,58 @@
             alert('Error: ' + err.message);
         }
     }
+
+    const setupLocalPreview = async () => {
+        const localContainer = document.createElement('div');
+        localContainer.className = 'participant-container';
+        
+        try {
+            const userInfo = await calls.getUserInfo();
+            
+            // Move local video into container
+            localVideo.parentElement.insertBefore(localContainer, localVideo);
+            localContainer.appendChild(localVideo);
+            
+            // Add name overlay
+            const nameOverlay = document.createElement('div');
+            nameOverlay.className = 'participant-name';
+            nameOverlay.setAttribute('data-local', 'true');
+            nameOverlay.textContent = `${userInfo.username} (you) 🔈`;
+            
+            localContainer.appendChild(nameOverlay);
+        } catch (err) {
+            console.error('Error setting up local preview:', err);
+        }
+    };
+
+    function updateAudioStatus(sessionId, enabled = true) {
+        const nameOverlay = document.querySelector(`[data-participant-id="${sessionId}"] .participant-name`);
+        if (nameOverlay) {
+            // Clean up the name by removing status icons
+            const baseName = nameOverlay.textContent
+                .replace(/ 🔈| 🔇/g, '')
+                .replace(/ \(you\)/g, '');
+            
+            // Add back (you) only if it's the local user
+            const isLocal = nameOverlay.hasAttribute('data-local');
+            nameOverlay.textContent = `${baseName}${isLocal ? ' (you)' : ''} ${enabled ? '🔈' : '🔇'}`;
+            console.log('Updated audio status:', { sessionId, enabled }, nameOverlay.textContent);
+        } else console.log('No name overlay found for session:', sessionId);
+    }
+
+    // Use specific handlers for most cases
+    calls.onTrackStatusChanged(payload => {
+        const { sessionId, enabled, kind } = payload;
+        // if (kind === 'audio') {
+            updateAudioStatus(sessionId, enabled);
+        // }
+    });
+
+    // Use generic handler for debugging or custom handling
+    calls.onWebSocketMessage(msg => {
+        console.log('WebSocket message received (generic):', msg);
+    });
 </script>
 </body>
 </html>
+

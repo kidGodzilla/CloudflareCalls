@@ -30,12 +30,16 @@ class CloudflareCalls {
         this.peerConnection = null;
         this.ws = null;
 
-        // Callbacks
-        this._onRemoteTrackCallback = null;
-        this._onDataMessageCallback = null;
+        // Specific message handlers
         this._onParticipantJoinedCallback = null;
         this._onParticipantLeftCallback = null;
+        this._onRemoteTrackCallback = null;
         this._onRemoteTrackUnpublishedCallback = null;
+        this._onTrackStatusChangedCallback = null;
+        this._onDataMessageCallback = null;
+        
+        // Generic message handlers
+        this._wsMessageHandlers = new Set();
 
         // Track management
         this.pulledTracks = new Map(); // Map<sessionId, Set<trackName>>
@@ -138,6 +142,16 @@ class CloudflareCalls {
      */
     onTrackStatusChanged(callback) {
         this._onTrackStatusChangedCallback = callback;
+    }
+
+    /**
+     * Registers a callback for WebSocket messages
+     * @param {Function} callback - Function to call when WebSocket messages are received
+     * @returns {Function} Function to unregister the callback
+     */
+    onWebSocketMessage(callback) {
+        this._wsMessageHandlers.add(callback);
+        return () => this._wsMessageHandlers.delete(callback);
     }
 
     /************************************************
@@ -713,34 +727,30 @@ class CloudflareCalls {
      */
     async _initWebSocket() {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+        
         return new Promise((resolve, reject) => {
             this.ws = new WebSocket(this.websocketUrl);
+            
             this.ws.onopen = () => {
                 console.log('WebSocket open');
                 this.ws.send(JSON.stringify({
                     type: 'join-websocket',
-                    payload: { roomId: this.roomId, userId: this.userId, token: this.token }
+                    payload: { 
+                        roomId: this.roomId, 
+                        userId: this.userId, 
+                        token: this.token 
+                    }
                 }));
                 resolve();
             };
-            this.ws.onmessage = async (evt) => {
-                console.log('WebSocket message received:', evt.data);
-                const data = JSON.parse(evt.data);
-                
-                switch (data.type) {
-                    case 'track-unpublished':
-                        console.log('Track unpublished event received:', data.payload);
-                        if (this._onRemoteTrackUnpublishedCallback) {
-                            this._onRemoteTrackUnpublishedCallback(data.payload.sessionId, data.payload.trackName);
-                        }
-                        break;
-                    // ... other cases ...
-                }
-            };
+
+            this.ws.onmessage = this._handleWebSocketMessage.bind(this);
+            
             this.ws.onerror = (err) => {
                 console.error('WebSocket error:', err);
                 reject(err);
             };
+
             this.ws.onclose = () => {
                 console.log('WebSocket closed');
             };
@@ -1460,6 +1470,76 @@ class CloudflareCalls {
         } catch (error) {
             console.error('Error getting user info:', error);
             throw error;
+        }
+    }
+
+    /**
+     * Handles WebSocket messages
+     * @private
+     * @param {MessageEvent} event - The WebSocket message event
+     * @returns {void}
+     */
+    _handleWebSocketMessage(event) {
+        try {
+            const message = JSON.parse(event.data);
+            console.log('WebSocket message received:', message);
+
+            // First, notify generic handlers
+            this._wsMessageHandlers.forEach(handler => {
+                try {
+                    handler(message);
+                } catch (err) {
+                    console.error('Error in WebSocket message handler:', err);
+                }
+            });
+
+            // Then handle specific message types
+            switch (message.type) {
+                case 'participant-joined':
+                    if (this._onParticipantJoinedCallback) {
+                        this._onParticipantJoinedCallback(message.payload);
+                    }
+                    break;
+
+                case 'participant-left':
+                    if (this._onParticipantLeftCallback) {
+                        this._onParticipantLeftCallback(message.payload.sessionId);
+                    }
+                    break;
+
+                case 'track-published':
+                    if (this._onRemoteTrackCallback) {
+                        // Handle track published event
+                        this._onRemoteTrackCallback(message.payload);
+                    }
+                    break;
+
+                case 'track-unpublished':
+                    if (this._onRemoteTrackUnpublishedCallback) {
+                        this._onRemoteTrackUnpublishedCallback(
+                            message.payload.sessionId,
+                            message.payload.trackName
+                        );
+                    }
+                    break;
+
+                case 'track-status-changed':
+                    if (this._onTrackStatusChangedCallback) {
+                        this._onTrackStatusChangedCallback(message.payload);
+                    }
+                    break;
+
+                case 'data-message':
+                    if (this._onDataMessageCallback) {
+                        this._onDataMessageCallback(message.payload);
+                    }
+                    break;
+
+                default:
+                    console.log('Unhandled message type:', message.type);
+            }
+        } catch (error) {
+            console.error('Error handling WebSocket message:', error);
         }
     }
 }
