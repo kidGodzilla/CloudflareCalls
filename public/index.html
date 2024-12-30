@@ -30,6 +30,7 @@
             background-color: black;
             /* margin: 5px; */
             border: 1px solid #ccc;
+            object-fit: scale-down; /* Scale down for the demo, you would want the default behavior */
         }
         .participant-container {
             width: 300px;
@@ -134,6 +135,30 @@
             display: flex;
             gap: 5px;
         }
+
+        /* Add CSS for health indicators */
+        .stream-health-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #666;
+            z-index: 2;
+        }
+
+        .stream-health-good {
+            background-color: #4CAF50;
+        }
+
+        .stream-health-fair {
+            background-color: #FFA726;
+        }
+
+        .stream-health-poor {
+            background-color: #F44336;
+        }
     </style>
 </head>
 <body>
@@ -143,8 +168,12 @@
 </h1>
 
 <div id="videos">
-    <!-- Local preview video -->
-    <video id="localVideo" autoplay muted playsinline></video>
+    <!-- Local preview container -->
+    <div class="participant-container" data-local="true">
+        <video id="localVideo" autoplay muted playsinline></video>
+        <div class="stream-health-indicator"></div>
+        <div class="participant-name"></div>
+    </div>
 </div>
 
 <div id="controls">
@@ -162,6 +191,51 @@
     <select id="audioInputSelect"></select>
     <select id="videoInputSelect"></select>
     <select id="audioOutputSelect"></select>
+
+    <select onchange="setQuality(this.value)" style="padding: 8px; margin: 5px;">
+        <optgroup label="16:9 High Quality">
+            <option value="high_16x9_xl">16:9 High XL (1080p/30fps)</option>
+            <option value="high_16x9_lg">16:9 High LG (720p/30fps)</option>
+            <option value="high_16x9_md">16:9 High MD (480p/30fps)</option>
+            <option value="high_16x9_sm">16:9 High SM (360p/30fps)</option>
+            <option value="high_16x9_xs">16:9 High XS (270p/30fps)</option>
+        </optgroup>
+        <optgroup label="16:9 Medium Quality">
+            <option value="medium_16x9_xl">16:9 Medium XL (1080p/24fps)</option>
+            <option value="medium_16x9_lg">16:9 Medium LG (720p/24fps)</option>
+            <option value="medium_16x9_md">16:9 Medium MD (480p/24fps)</option>
+            <option value="medium_16x9_sm">16:9 Medium SM (360p/20fps)</option>
+            <option value="medium_16x9_xs">16:9 Medium XS (270p/20fps)</option>
+        </optgroup>
+        <optgroup label="16:9 Low Quality">
+            <option value="low_16x9_xl">16:9 Low XL (1080p/15fps)</option>
+            <option value="low_16x9_lg">16:9 Low LG (720p/15fps)</option>
+            <option value="low_16x9_md">16:9 Low MD (480p/15fps)</option>
+            <option value="low_16x9_sm">16:9 Low SM (360p/12fps)</option>
+            <option value="low_16x9_xs">16:9 Low XS (270p/10fps)</option>
+        </optgroup>
+        <optgroup label="4:3 High Quality">
+            <option value="high_4x3_xl">4:3 High XL (960x720/30fps)</option>
+            <option value="high_4x3_lg">4:3 High LG (640x480/30fps)</option>
+            <option value="high_4x3_md">4:3 High MD (480x360/30fps)</option>
+            <option value="high_4x3_sm">4:3 High SM (320x240/30fps)</option>
+            <option value="high_4x3_xs">4:3 High XS (240x180/30fps)</option>
+        </optgroup>
+        <optgroup label="4:3 Medium Quality">
+            <option value="medium_4x3_xl">4:3 Medium XL (960x720/24fps)</option>
+            <option value="medium_4x3_lg">4:3 Medium LG (640x480/24fps)</option>
+            <option value="medium_4x3_md">4:3 Medium MD (480x360/20fps)</option>
+            <option value="medium_4x3_sm" selected>4:3 Medium SM (320x240/20fps)</option>
+            <option value="medium_4x3_xs">4:3 Medium XS (240x180/20fps)</option>
+        </optgroup>
+        <optgroup label="4:3 Low Quality">
+            <option value="low_4x3_xl">4:3 Low XL (960x720/15fps)</option>
+            <option value="low_4x3_lg">4:3 Low LG (640x480/15fps)</option>
+            <option value="low_4x3_md">4:3 Low MD (480x360/12fps)</option>
+            <option value="low_4x3_sm">4:3 Low SM (320x240/10fps)</option>
+            <option value="low_4x3_xs">4:3 Low XS (240x180/10fps)</option>
+        </optgroup>
+    </select>
 
     <button id="previewMedia">Preview Media</button>
 
@@ -185,6 +259,31 @@
 </div>
 
 <div id="connectionStatus" style="position: fixed; top: 10px; right: 10px;"></div>
+
+<div id="connectionStats" style="position: fixed; bottom: 10px; right: 10px; background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px; font-family: monospace;">
+    <h4 style="margin: 0 0 0 0;  cursor: pointer;" onclick="document.querySelector('.stats-grid').style.display === 'grid' ? document.querySelector('.stats-grid').style.display = 'none' : document.querySelector('.stats-grid').style.display = 'grid'">
+        Connection Health
+    </h4>
+    <div class="stats-grid" style="display: none; grid-template-columns: auto auto; gap: 8px; font-size: 12px; margin-top: 10px;">
+        <div>Upload:</div>
+        <div id="uploadHealth">-</div>
+        
+        <div>Download:</div>
+        <div id="downloadHealth">-</div>
+        
+        <div>Bitrate:</div>
+        <div id="bitrateStats">-</div>
+        
+        <div>Quality:</div>
+        <div id="qualityLimitation">-</div>
+        
+        <div>Packet Loss:</div>
+        <div id="packetLoss">-</div>
+        
+        <div>Round Trip:</div>
+        <div id="roundTrip">-</div>
+    </div>
+</div>
 
 <!-- Adapter.js for broader WebRTC compatibility -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/webrtc-adapter/8.1.2/adapter.min.js"></script>
@@ -270,12 +369,7 @@
 
     // ===== 4) Remote Track Handling =====
     calls.onRemoteTrack(async track => {
-        console.log('New remote track:', { 
-            sessionId: track.sessionId, 
-            trackId: track.id,
-            trackName: track.trackName,
-            kind: track.kind 
-        });
+        console.log('New remote track:', track);
         
         // Skip if track is invalid or missing required properties
         if (!track.id || !track.trackName || !track.kind) {
@@ -317,6 +411,11 @@
             participantContainer.setAttribute('data-participant-id', track.sessionId);
             videosContainer.appendChild(participantContainer);
             
+            // Add health indicator
+            const healthIndicator = document.createElement('div');
+            healthIndicator.className = 'stream-health-indicator';
+            participantContainer.appendChild(healthIndicator);
+
             // Add name overlay
             const nameOverlay = document.createElement('div');
             nameOverlay.className = 'participant-name';
@@ -334,6 +433,7 @@
             videoElement.setAttribute('data-track-id', track.id);
             videoElement.setAttribute('data-track-name', track.trackName);
             videoElement.setAttribute('data-mid', track.mid);
+            videoElement.setAttribute('data-track-source', track.source);
             
             videoElement.srcObject = new MediaStream([track]);
             participantContainer.appendChild(videoElement);
@@ -402,14 +502,6 @@
             await updateParticipantList();
             await updateRoomList();
         }, 100);
-
-        // Just handle data channel subscription
-        try {
-            await calls.subscribeDataChannel(participant.sessionId, 'chat');
-            console.log('Subscribed to participant\'s "chat" channel:', participant.sessionId);
-        } catch (err) {
-            console.warn('Error subscribing to participant chat channel:', err);
-        }
     });
 
     calls.onParticipantLeft(async (sessionId) => {
@@ -477,54 +569,58 @@
 
             history.replaceState(null, '', `?room_id=${encodeURIComponent(room.roomId)}`);
             
-            // Join the room using the roomId from the response
-            await calls.joinRoom(room.roomId);
-            console.log('Joined room:', calls.roomId);
-
-            previewMediaBtn.click();
-            
-            // Update UI
-            await updateRoomList();
+            joinRoomBtn.click();
         } catch (err) {
             console.error('Error creating/joining room:', err);
             alert('Error: ' + err.message);
         }
     });
 
+    async function joinRoomById(id) {
+        previewMediaBtn.click();
+
+        try {
+            // Set default quality before joining
+            calls.setMediaQuality('medium_4x3_sm');
+
+            await calls.joinRoom(id, { username: _username });
+            console.log('Joined room:', id);
+
+            // Get session ID after joining
+            const sessionId = calls.sessionId;
+            console.log('Session ID:', sessionId);
+
+            // Set the session ID on our pre-existing local container
+            const localContainer = document.querySelector('.participant-container[data-local="true"]');
+            if (localContainer) {
+                localContainer.setAttribute('data-participant-id', sessionId);
+            }
+
+            // Update participant list & room list after joining
+            await updateParticipantList();
+            await updateRoomList();
+
+            history.replaceState(null, '', `?room_id=${encodeURIComponent(id)}`);
+
+            // Start stats monitoring
+            calls.startStatsMonitoring(1000);
+        } catch (err) {
+            console.error('Error joining room:', err);
+            alert('Error joining room: ' + err.message);
+        }
+    }
+    window.joinRoomById = joinRoomById;
+
     joinRoomBtn.addEventListener('click', async () => {
+        if (!window._username) return alert('Acquire token first.');
+
         let searchRoomId = (location.search.split('room_id=')[1]).split('&')[0];
         if (!window._roomId && searchRoomId) window._roomId = searchRoomId;
 
         if (!window._roomId) window._roomId = prompt('Enter Room ID to join:');
         if (!_roomId) return;
 
-        if (!window._username) window._username = prompt('Enter your username:');
-
-        previewMediaBtn.click();
-
-        try {
-            await calls.joinRoom(_roomId, { username: _username });
-            console.log('Joined room:', _roomId);
-            
-            // Get session ID after joining
-            const sessionId = calls.sessionId;
-            console.log('Session ID:', sessionId);
-            
-            // Set the session ID on our local container
-            const localContainer = document.querySelector('.participant-container');
-            if (localContainer) {
-                localContainer.setAttribute('data-participant-id', sessionId);
-            }
-            
-            // Update participant list & room list after joining
-            await updateParticipantList();
-            await updateRoomList();
-            
-            history.replaceState(null, '', `?room_id=${encodeURIComponent(_roomId)}`);
-        } catch (err) {
-            console.error('Error joining room:', err);
-            alert('Error joining room: ' + err.message);
-        }
+        await joinRoomById(_roomId);
     });
 
     leaveRoomBtn.addEventListener('click', async () => {
@@ -545,6 +641,9 @@
         await updateRoomList();
         
         alert('Left the room.');
+        
+        // Clean up stats monitoring
+        calls.stopStatsMonitoring();
     });
 
     toggleVideoBtn.addEventListener('click', async () => {
@@ -573,17 +672,6 @@
             audioTrack.enabled = !isEnabled;
             calls.toggleMedia({ audio: !isEnabled, video: null });
             toggleAudioBtn.textContent = isEnabled ? 'Enable Audio' : 'Disable Audio';
-            
-            // Update local audio status (fixed logic)
-            const localNameOverlay = document.querySelector('[data-local="true"]');
-            if (localNameOverlay) {
-                // Remove any existing status icons and (you) before updating
-                const baseName = localNameOverlay.textContent
-                    .replace(/ 🔈| 🔇/g, '')
-                    .replace(/ \(you\)/g, '');
-                
-                localNameOverlay.textContent = `${baseName} (you) ${isEnabled ? '🔇' : '🔈'}`;
-            }
         }
     });
 
@@ -713,12 +801,9 @@
             alert('Error: ' + err.message);
         }
     }
+    window.forceUnpublishParticipant = forceUnpublishParticipant;
 
     const setupLocalPreview = async () => {
-        const localContainer = document.createElement('div');
-        localContainer.className = 'participant-container';
-        localContainer.setAttribute('data-participant-id', calls.sessionId);
-
         try {
             const previewStream = await calls.previewMedia({
                 audioDeviceId: audioInputSelect.value,
@@ -731,18 +816,14 @@
         
         try {
             const userInfo = await calls.getUserInfo();
-            
-            // Move local video into container
-            localVideo.parentElement.insertBefore(localContainer, localVideo);
-            localContainer.appendChild(localVideo);
+            console.log('User info:', userInfo);
+
+            const localContainer = document.querySelector('.participant-container[data-local="true"]');
+            localContainer.setAttribute('data-participant-id', userInfo.userId);
             
             // Add name overlay
-            const nameOverlay = document.createElement('div');
-            nameOverlay.className = 'participant-name';
-            nameOverlay.setAttribute('data-local', 'true');
+            const nameOverlay = document.querySelector('.participant-container[data-local="true"] .participant-name');
             nameOverlay.textContent = `${userInfo.username} (you) 🔈`;
-            
-            localContainer.appendChild(nameOverlay);
         } catch (err) {
             console.error('Error setting up local preview:', err);
         }
@@ -768,9 +849,10 @@
     // Use specific handlers for most cases
     calls.onTrackStatusChanged(payload => {
         const { sessionId, enabled, kind } = payload;
-        // if (kind === 'audio') {
+        console.log('onTrackStatusChanged kind', kind);
+        if (kind === 'audio') {
             updateAudioStatus(sessionId, enabled);
-        // }
+        }
     });
 
     // Use generic handler for debugging or custom handling
@@ -835,6 +917,94 @@
     calls.onRoomMetadataUpdated(async (payload) => {
         console.log('Room metadata updated:', payload);
         await updateRoomList();  // Refresh room list
+    });
+
+    // Quality controls
+    async function setQuality(preset) {
+        try {
+            await calls.setMediaQuality(preset);
+            console.log(`Set quality to ${preset}`);
+        } catch (error) {
+            console.error('Error setting quality:', error);
+        }
+    }
+    window.setQuality = setQuality;
+
+    // Connection health monitoring
+    const uploadHealth = document.getElementById('uploadHealth');
+    const downloadHealth = document.getElementById('downloadHealth');
+    const bitrateStats = document.getElementById('bitrateStats');
+    const qualityLimitation = document.getElementById('qualityLimitation');
+    const packetLoss = document.getElementById('packetLoss');
+    const roundTrip = document.getElementById('roundTrip');
+
+    calls.onConnectionStats((stats, streamStats) => {
+        // Format bitrates to Mbps/Kbps
+        const formatBitrate = (bits) => {
+            if (bits > 1000000) {
+                return `${(bits / 1000000).toFixed(2)} Mbps`;
+            }
+            return `${(bits / 1000).toFixed(0)} Kbps`;
+        };
+
+        // Update bitrates
+        const outBitrate = formatBitrate(stats.outbound.bitrate);
+        const inBitrate = formatBitrate(stats.inbound.bitrate);
+        bitrateStats.textContent = `↑${outBitrate} ↓${inBitrate}`;
+
+        // Update quality limitation
+        const limitation = stats.outbound.qualityLimitation;
+        qualityLimitation.textContent = limitation.charAt(0).toUpperCase() + limitation.slice(1);
+        qualityLimitation.style.color = limitation === 'none' ? '#4CAF50' : '#FFA726';
+
+        // Update packet loss
+        const outLoss = stats.outbound.packetLoss.toFixed(1);
+        const inLoss = stats.inbound.packetLoss.toFixed(1);
+        packetLoss.textContent = `↑${outLoss}% ↓${inLoss}%`;
+        packetLoss.style.color = Math.max(stats.outbound.packetLoss, stats.inbound.packetLoss) > 5 
+            ? '#F44336' : '#4CAF50';
+
+        // Update round trip time
+        const rtt = (stats.connection.roundTripTime * 1000).toFixed(0);
+        roundTrip.textContent = `${rtt}ms`;
+        roundTrip.style.color = rtt > 200 ? '#F44336' : rtt > 100 ? '#FFA726' : '#4CAF50';
+
+        // Update overall health indicators
+        const getHealthStatus = (stats) => {
+            if (stats.packetLoss > 10 || stats.qualityLimitation !== 'none') return '🔴 Poor';
+            if (stats.packetLoss > 5) return '🟡 Fair';
+            return '🟢 Good';
+        };
+
+        uploadHealth.textContent = getHealthStatus(stats.outbound);
+        downloadHealth.textContent = getHealthStatus({
+            packetLoss: stats.inbound.packetLoss,
+            qualityLimitation: 'none'
+        });
+
+        // Update individual stream health indicators
+        if (streamStats) {  // Add null check
+            streamStats.forEach(streamStat => {
+                const container = document.querySelector(`.participant-container[data-participant-id="${streamStat.sessionId}"]`);
+                const indicator = container?.querySelector('.stream-health-indicator');
+                if (!indicator) return;
+
+                // Remove existing health classes
+                indicator.classList.remove('stream-health-good', 'stream-health-fair', 'stream-health-poor');
+
+                // Determine health status
+                let healthClass;
+                if (streamStat.packetLoss > 10 || streamStat.qualityLimitation !== 'none') {
+                    healthClass = 'stream-health-poor';
+                } else if (streamStat.packetLoss > 5) {
+                    healthClass = 'stream-health-fair';
+                } else {
+                    healthClass = 'stream-health-good';
+                }
+
+                indicator.classList.add(healthClass);
+            });
+        }
     });
 </script>
 </body>

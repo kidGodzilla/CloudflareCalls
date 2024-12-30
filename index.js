@@ -424,15 +424,13 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/pull', verifyToken, async (req,
 /**
  * @api {put} /api/rooms/:roomId/sessions/:sessionId/renegotiate Renegotiate Session
  * @apiName RenegotiateSession
- * @apiGroup Sessions
- * @apiDescription Renegotiates the session by updating the session description.
- *
- * @apiParam {String} roomId The ID of the room.
- * @apiParam {String} sessionId The session ID of the participant.
- *
- * @apiParam (Request Body) {Object} sessionDescription Session description object
- * @apiParam (Request Body) {String} sessionDescription.sdp SDP string
- * @apiParam (Request Body) {String} sessionDescription.type SDP type ('offer' or 'answer')
+ * @apiGroup Session
+ * @apiDescription Renegotiate an existing session with new SDP offer
+ * @apiParam {String} roomId Room identifier
+ * @apiParam {String} sessionId Session identifier
+ * @apiBody {Object} sessionDescription WebRTC session description
+ * @apiBody {String} sessionDescription.sdp SDP offer
+ * @apiBody {String} sessionDescription.type Type of SDP message
  *
  * @apiSuccess {Object} data Response from Cloudflare Calls API
  */
@@ -460,17 +458,14 @@ app.put('/api/rooms/:roomId/sessions/:sessionId/renegotiate', verifyToken, async
 /**
  * @api {post} /api/rooms/:roomId/sessions/:sessionId/publish Publish Tracks
  * @apiName PublishTracks
- * @apiGroup Sessions
- * @apiDescription Publishes local tracks for a session and notifies other participants.
- *
- * @apiParam {String} roomId The ID of the room.
- * @apiParam {String} sessionId The session ID of the participant.
- *
- * @apiParam (Request Body) {Object} offer The SDP offer
- * @apiParam (Request Body) {Array} tracks Array of track objects to publish
- * @apiParam (Request Body) {String} tracks.location Track location ('local' or 'remote')
- * @apiParam (Request Body) {String} tracks.trackName Unique identifier for the track
- * @apiParam (Request Body) {String} [tracks.mid] Media ID for local tracks
+ * @apiGroup Session
+ * @apiDescription Publish media tracks to the room
+ * @apiParam {String} roomId Room identifier
+ * @apiParam {String} sessionId Session identifier
+ * @apiBody {Object} offer WebRTC offer for publishing
+ * @apiBody {Array} tracks Array of track information
+ * @apiBody {String} tracks.location Track location (local/remote)
+ * @apiBody {String} tracks.trackName Unique track identifier
  *
  * @apiSuccess {Object} data Response from Cloudflare Calls API
  */
@@ -525,13 +520,11 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
 /**
  * @api {post} /api/rooms/:roomId/sessions/:sessionId/datachannels/new Manage Data Channels
  * @apiName ManageDataChannels
- * @apiGroup DataChannels
- * @apiDescription Creates or subscribes to data channels in the Cloudflare Calls SFU.
- *
- * @apiParam {String} roomId The ID of the room.
- * @apiParam {String} sessionId The session ID of the participant.
- *
- * @apiParam (Request Body) {Array} dataChannels Array of data channel objects.
+ * @apiGroup Session
+ * @apiDescription Manage data channel subscriptions
+ * @apiParam {String} roomId Room identifier
+ * @apiParam {String} sessionId Session identifier
+ * @apiBody {Array} dataChannels Array of data channel names
  *
  * @apiSuccess {Object} response Response from Cloudflare Calls API.
  *

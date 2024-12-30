@@ -58,5 +58,6 @@ You can see an example of this flow in the example included at `public/index.htm
 - ~~You cannot switch inputs after a track has been published~~
 - ~~Tracks are not correctly unpublished in most cases~~
 - ~~Participant list (text list) does not update properly~~
-- Screen sharing does not work
+- ~~Screen sharing does not work~~
+- Cannot publish tracks after unpublishing tracks
 - More..
