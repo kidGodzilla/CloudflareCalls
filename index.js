@@ -219,7 +219,7 @@ app.post('/api/rooms/:roomId/join', verifyToken, async (req, res) => {
 });
 
 /**
- * @api {post} /api/rooms/:roomId/sessions/:sessionId/publish Publish local tracks
+ * @api {post} /api/rooms/:roomId/sessions/:sessionId/publish Publish Tracks
  * @apiName PublishTracks
  * @apiGroup Sessions
  *
@@ -294,7 +294,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (r
 app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async (req, res) => {
     try {
         const { roomId, sessionId } = req.params;
-        const { trackName, mid, force } = req.body;
+        const { trackName, mid, force, sessionDescription } = req.body;
 
         // If trying to force unpublish someone else's track
         if (force && sessionId !== req.user.sessionId) {
@@ -316,6 +316,13 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
             });
         }
 
+        if (!sessionDescription) {
+            return res.status(400).json({
+                errorCode: 'INVALID_REQUEST',
+                errorDescription: 'sessionDescription is required to unpublish a track.'
+            });
+        }
+
         // Call Cloudflare API to close the track
         const cfUrl = `${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/close`;
         if (DEBUG) console.log('Calling Cloudflare API:', cfUrl);
@@ -324,7 +331,8 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
             tracks: [{
                 mid: mid.toString()
             }],
-            force: Boolean(force)
+            force: Boolean(force),
+            sessionDescription
         };
 
         if (DEBUG) console.log('Request body:', JSON.stringify(requestBody, null, 2));
@@ -419,7 +427,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/pull', verifyToken, async (req,
 /**
  * @api {put} /api/rooms/:roomId/sessions/:sessionId/renegotiate Renegotiate Session
  * @apiName RenegotiateSession
- * @apiGroup Session
+ * @apiGroup Sessions
  * @apiDescription Renegotiate an existing session with new SDP offer
  * @apiParam {String} roomId Room identifier
  * @apiParam {String} sessionId Session identifier
@@ -451,71 +459,9 @@ app.put('/api/rooms/:roomId/sessions/:sessionId/renegotiate', verifyToken, async
 });
 
 /**
- * @api {post} /api/rooms/:roomId/sessions/:sessionId/publish Publish Tracks
- * @apiName PublishTracks
- * @apiGroup Session
- * @apiDescription Publish media tracks to the room
- * @apiParam {String} roomId Room identifier
- * @apiParam {String} sessionId Session identifier
- * @apiBody {Object} offer WebRTC offer for publishing
- * @apiBody {Array} tracks Array of track information
- * @apiBody {String} tracks.location Track location (local/remote)
- * @apiBody {String} tracks.trackName Unique track identifier
- *
- * @apiSuccess {Object} data Response from Cloudflare Calls API
- */
-app.post('/api/rooms/:roomId/sessions/:sessionId/publish', verifyToken, async (req, res) => {
-    const { roomId, sessionId } = req.params;
-    const { offer, tracks } = req.body;
-
-    const room = rooms.get(roomId);
-    if (!room) {
-        return res.status(404).json({ error: 'Room not found' });
-    }
-
-    const participant = room.participants.find(p => p.sessionId === sessionId);
-    if (!participant) {
-        return res.status(404).json({ error: 'Session not found in this room' });
-    }
-
-    // Store these trackName(s) in participant.publishedTracks
-    for (const t of tracks) {
-        if (!participant.publishedTracks.includes(t.trackName)) {
-            participant.publishedTracks.push(t.trackName);
-        }
-    }
-
-    rooms.set(roomId, room);
-    // Now call Cloudflare to finalize the push
-    const cfResp = await fetch(`${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/new`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${CLOUDFLARE_APP_SECRET}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            sessionDescription: offer,
-            tracks
-        })
-    });
-    const data = await cfResp.json();
-    if (data.sessionDescription) {
-        // Emit a 'track-published' event to other participants in the room
-        broadcastToRoom(roomId, {
-            type: 'track-published',
-            payload: {
-                sessionId,
-                trackNames: tracks.map(t => t.trackName)
-            }
-        }, participant.userId);
-    }
-    return res.json(data);
-});
-
-/**
  * @api {post} /api/rooms/:roomId/sessions/:sessionId/datachannels/new Manage Data Channels
  * @apiName ManageDataChannels
- * @apiGroup Session
+ * @apiGroup Sessions
  * @apiDescription Manage data channel subscriptions
  * @apiParam {String} roomId Room identifier
  * @apiParam {String} sessionId Session identifier
@@ -606,10 +552,6 @@ app.get('/api/rooms/:roomId/participants', verifyToken, (req, res) => {
  *
  * @apiUse Error404
  */
-
-/* Note: This endpoint was previously listed above Renegotiate, Publish, and Data Channels.
-   For better organization, it's moved under the Participants group.
-*/
 app.get('/api/rooms/:roomId/participant/:sessionId/tracks', verifyToken, async (req, res) => {
     const { sessionId, roomId } = req.params;
 
@@ -857,7 +799,7 @@ function broadcastToRoom(roomId, message, excludeUserId = null) {
         if (userId === excludeUserId) continue;
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(message));
-            if (DEBUG) console.log('Sent WebSocket message to user:', userId, message);
+            if (DEBUG) console.log('Sent Broadcast message to user:', userId);
         }
     }
 }
@@ -950,7 +892,6 @@ app.get('/api/users/:userId', verifyToken, (req, res) => {
     });
 });
 
-// Add this new endpoint to handle user info requests
 /**
  * @api {get} /api/users/:userId Get User Info
  * @apiName GetUserInfo
@@ -999,7 +940,6 @@ app.get('/api/users/:userId', verifyToken, (req, res) => {
     });
 });
 
-// Update leave room to clean up user info
 app.post('/api/rooms/:roomId/leave', verifyToken, async (req, res) => {
     const { roomId } = req.params;
     const { sessionId } = req.body;
@@ -1034,7 +974,6 @@ app.post('/api/rooms/:roomId/leave', verifyToken, async (req, res) => {
     res.json({ success: true });
 });
 
-// Add cleanup when server stops
 process.on('SIGINT', () => {
     users.clear();
     process.exit();
@@ -1096,7 +1035,6 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/track-status', verifyToken, asy
     }
 });
 
-// Add list rooms endpoint
 app.get('/api/rooms', verifyToken, (req, res) => {
     const roomList = Array.from(rooms.entries()).map(([roomId, room]) => 
         serializeRoom(roomId, room)
@@ -1105,7 +1043,6 @@ app.get('/api/rooms', verifyToken, (req, res) => {
     res.json({ rooms: roomList });
 });
 
-// Add update metadata endpoint
 app.put('/api/rooms/:roomId/metadata', verifyToken, (req, res) => {
     const { roomId } = req.params;
     const { name, metadata } = req.body;
@@ -1139,7 +1076,6 @@ app.put('/api/rooms/:roomId/metadata', verifyToken, (req, res) => {
     res.json(serializeRoom(roomId, room));
 });
 
-// Update getRoomIdByUserId to use sessionId instead
 function getRoomIdBySessionId(sessionId) {
     for (const [roomId, room] of rooms.entries()) {
         if (room.participants.find(p => p.sessionId === sessionId)) {

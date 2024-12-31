@@ -411,8 +411,30 @@ class CloudflareCalls {
      * @async
      * @returns {Promise<void>}
      */
+    async _cleanupEndedTracks() {
+        // Clear local media devices (readyState == 'ended', so they can't be reused)
+        if (this.localStream) {
+            for (const track of this.localStream.getTracks()) {
+                if (track.readyState === 'ended') {
+                    this.localStream.removeTrack(track);
+                    track.stop();
+                }
+            }
+        }
+
+        // If no tracks remain, clear the stream
+        if (this.localStream && !this.localStream.getTracks().length) {
+            this.localStream = null;
+        }
+    }
     async leaveRoom() {
         if (!this.roomId || !this.sessionId) return;
+
+        // Clean up published tracks (if applicable)
+        const senders = this.peerConnection.getSenders();
+        if (senders && senders.length) {
+            await this.unpublishAllTracks();
+        }
 
         try {
             await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/leave`, {
@@ -435,6 +457,8 @@ class CloudflareCalls {
             this.peerConnection.close();
             this.peerConnection = null;
         }
+
+        await this._cleanupEndedTracks();
 
         this._log('Left room, closed PC & WS');
 
@@ -459,7 +483,7 @@ class CloudflareCalls {
      */
     async publishTracks() {
         if (!this.localStream) {
-            throw new Error('No local media stream to publish.');
+            return this._warn('No local media stream to publish.');
         }
         await this._publishTracks();
     }
@@ -488,6 +512,10 @@ class CloudflareCalls {
         }
 
         try {
+            // Create an offer for the updated state
+            const offer = await this.peerConnection.createOffer();
+            await this.peerConnection.setLocalDescription(offer);
+
             const unpublishUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`;
             const response = await this._fetch(unpublishUrl, {
                 method: 'POST',
@@ -495,25 +523,30 @@ class CloudflareCalls {
                 body: JSON.stringify({
                     trackName: sender.track.id,
                     mid: transceiver.mid,
-                    force: force
+                    force,
+                    sessionDescription: {
+                        type: offer.type,
+                        sdp: offer.sdp
+                    }
                 })
             });
 
+            if (!response || !response.ok) return false;
             const result = await response.json();
-            this._handleError(result);
 
             // Stop the track
             sender.track.stop();
 
-            // If not forcing, handle renegotiation
-            if (!force && result.requiresImmediateRenegotiation) {
-                await this._renegotiate();
-            }
+            // Remove from PeerConnection after server confirms
+            this.peerConnection.removeTrack(sender);
+
+            // Remove from our tracked set
+            this.publishedTracks.delete(sender.track.id);
 
             return result;
         } catch (error) {
-            this._error(`Error unpublishing ${trackKind} track:`, error);
-            throw error;
+            this._warn(`Error unpublishing ${trackKind} track:`, error);
+            return false;
         }
     }
 
@@ -883,7 +916,7 @@ class CloudflareCalls {
                     // Handle specific message types
                     switch (message.type) {
                         case 'participant-joined':
-                            if (this._onParticipantJoinedCallback) {
+                    if (this._onParticipantJoinedCallback) {
                                 this._onParticipantJoinedCallback(message.payload);
                             }
                             break;
@@ -902,7 +935,7 @@ class CloudflareCalls {
                             break;
 
                         case 'track-unpublished':
-                            if (this._onRemoteTrackUnpublishedCallback) {
+                    if (this._onRemoteTrackUnpublishedCallback) {
                                 this._onRemoteTrackUnpublishedCallback(
                                     message.payload.sessionId,
                                     message.payload.trackName
@@ -917,7 +950,7 @@ class CloudflareCalls {
                             break;
 
                         case 'data-message':
-                            if (this._onDataMessageCallback) {
+                    if (this._onDataMessageCallback) {
                                 this._onDataMessageCallback(message.payload);
                             }
                             break;
@@ -961,6 +994,8 @@ class CloudflareCalls {
      */
     _startPolling() {
         this.pollingInterval = setInterval(async () => {
+            if (!this.roomId) return;
+
             try {
                 const resp = await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/participants`)
                     .then(r => r.json());
@@ -1211,7 +1246,7 @@ class CloudflareCalls {
     async shareScreen() {
         try {
             // Stop any existing video tracks (Todo: breaks the addTrack)
-            // await this.unpublishAllTracks('video');
+            await this.unpublishAllTracks('video');
 
             const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
                 video: true,
@@ -1228,10 +1263,11 @@ class CloudflareCalls {
 
             // Handle the user stopping screen share
             screenTrack.onended = async () => {
-                this.localStream.removeTrack(screenTrack);
-                // Get a new video track from the camera
-                const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                this.localStream.addTrack(newStream.getVideoTracks()[0]);
+                await this.unpublishAllTracks();
+                await this._cleanupEndedTracks();
+
+                this.localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                this._log('Re-acquired local media');
                 await this._publishTracks();
             };
         } catch (err) {
@@ -1363,7 +1399,11 @@ class CloudflareCalls {
             senders = senders.filter(s => s.track && s.track.kind === trackKind);
         }
         this._log('Unpublishing all tracks:', senders.length);
-        
+
+        // Create an offer for the updated state
+        const offer = await this.peerConnection.createOffer();
+        await this.peerConnection.setLocalDescription(offer);
+
         for (const sender of senders) {
             if (sender.track) {
                 try {
@@ -1385,9 +1425,13 @@ class CloudflareCalls {
                     await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
+                        body: JSON.stringify({
                             trackName: trackId,
-                            mid: mid
+                            mid: mid,
+                            sessionDescription: {
+                                type: offer.type,
+                                sdp: offer.sdp
+                            }
                         })
                     });
 
@@ -1396,6 +1440,9 @@ class CloudflareCalls {
                     
                     // Remove from our tracked set
                     this.publishedTracks.delete(trackId);
+
+                    // Since we're unpublishing we need to stop local streams
+                    await this._cleanupEndedTracks();
                     
                     this._log(`Successfully unpublished track: ${trackId}`);
                 } catch (error) {

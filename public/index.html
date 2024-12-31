@@ -629,9 +629,9 @@
     });
 
     async function joinRoomById(id) {
-        previewMediaBtn.click();
-
         leaveRoomBtn.click();
+
+        previewMediaBtn.click();
 
         try {
             // Set default quality before joining
@@ -911,7 +911,7 @@
 
     // Use generic handler for debugging or custom handling
     calls.onWebSocketMessage(msg => {
-        // console.log('WebSocket message received (generic):', msg);
+        console.log('WebSocket message received (generic):', msg);
     });
 
     // Add connection status monitoring
