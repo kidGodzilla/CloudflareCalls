@@ -186,14 +186,13 @@ class CloudflareCalls {
 
             // Check if the response status is OK (status in the range 200-299)
             if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+                this._warn(`HTTP error! status: ${response.status}`);
             }
 
             return response;
         } catch (error) {
-            this._error(`Fetch error for ${url}:`, error);
-            throw error;
+            this._warn(`Fetch error for ${url}:`, error);
+            return false;
         }
     }
 
@@ -538,7 +537,7 @@ class CloudflareCalls {
                 }).then(r => r.json());
 
                 if (response.errorCode) {
-                    this._error('Renegotiation failed:', response.errorDescription);
+                    this._warn('Renegotiation failed:', response.errorDescription);
                     return;
                 }
 
@@ -724,15 +723,14 @@ class CloudflareCalls {
      * @private
      * @returns {Promise<RTCPeerConnection>} The configured RTCPeerConnection instance.
      */
-    async _createPeerConnection() {
-        let iceServers = [
-            { urls: 'stun:stun.cloudflare.com:3478' }
-        ];
+    async _attemptIceServersUpdate() {
+        let iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 
         try {
             const response = await this._fetch(`${this.backendUrl}/api/ice-servers`);
             if (!response.ok) {
-                throw new Error(`Failed to fetch ICE servers: ${response.status} ${response.statusText}`);
+                this._warn(`Failed to fetch ICE servers: ${response.status} ${response.statusText}`);
+                return false;
             }
 
             const data = await response.json();
@@ -750,12 +748,16 @@ class CloudflareCalls {
                 });
                 this._log('Fetched ICE servers:', iceServers);
             } else {
-                throw new Error('Invalid ICE servers format received from /api/ice-servers');
+                return iceServers;
             }
         } catch (error) {
-            this._error('Error fetching ICE servers:', error);
+            this._warn('Error fetching ICE servers:', error);
             // Fallback to default ICE servers if fetching fails
+            return false;
         }
+    }
+    async _createPeerConnection() {
+        let iceServers = await this._attemptIceServersUpdate() || [{ urls: 'stun:stun.cloudflare.com:3478' }];
 
         const pc = new RTCPeerConnection({
             iceServers: iceServers,
