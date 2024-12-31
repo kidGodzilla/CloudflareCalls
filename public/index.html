@@ -631,6 +631,8 @@
     async function joinRoomById(id) {
         previewMediaBtn.click();
 
+        leaveRoomBtn.click();
+
         try {
             // Set default quality before joining
             calls.setMediaQuality('medium_4x3_sm');
@@ -692,7 +694,7 @@
         // Update room list after leaving
         await updateRoomList();
         
-        alert('Left the room.');
+        console.log('Left the room.');
         
         // Clean up stats monitoring
         calls.stopStatsMonitoring();
