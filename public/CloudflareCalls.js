@@ -412,28 +412,39 @@ class CloudflareCalls {
      * @returns {Promise<void>}
      */
     async leaveRoom() {
-        if (this.peerConnection) {
-            this.peerConnection.close();
-            this.peerConnection = null;
+        if (!this.roomId || !this.sessionId) return;
+
+        try {
+            await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/leave`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: this.sessionId })
+            });
+        } catch (error) {
+            this._warn('Error leaving room:', error);
         }
-        if (this.localStream) {
-            this.localStream.getTracks().forEach(track => track.stop());
-            this.localStream = null;
-        }
+
+        // Clean up WebSocket
         if (this.ws) {
             this.ws.close();
             this.ws = null;
         }
-        this._log('Left room, closed PC & WS');
 
-        // Stop polling
-        if (this.pollingInterval) {
-            clearInterval(this.pollingInterval);
-            this.pollingInterval = null;
+        // Clean up PeerConnection
+        if (this.peerConnection) {
+            this.peerConnection.close();
+            this.peerConnection = null;
         }
 
-        // Clear pulledTracks
+        this._log('Left room, closed PC & WS');
+
+        // Reset room state
+        this.roomId = null;
+        this.sessionId = null;
         this.pulledTracks.clear();
+        this.midToSessionId.clear();
+        this.midToTrackName.clear();
+        this.publishedTracks.clear();
     }
 
     /************************************************
@@ -864,7 +875,69 @@ class CloudflareCalls {
                 resolve();
             };
 
-            this.ws.onmessage = this._handleWebSocketMessage.bind(this);
+            this.ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    this._log('WebSocket message received:', message);
+
+                    // Handle specific message types
+                    switch (message.type) {
+                        case 'participant-joined':
+                            if (this._onParticipantJoinedCallback) {
+                                this._onParticipantJoinedCallback(message.payload);
+                            }
+                            break;
+
+                        case 'participant-left':
+                            if (this._onParticipantLeftCallback) {
+                                this._onParticipantLeftCallback(message.payload);
+                            }
+                            break;
+
+                        case 'track-published':
+                            if (this._onRemoteTrackCallback) {
+                                // Handle track published event
+                                this._onRemoteTrackCallback(message.payload);
+                            }
+                            break;
+
+                        case 'track-unpublished':
+                            if (this._onRemoteTrackUnpublishedCallback) {
+                                this._onRemoteTrackUnpublishedCallback(
+                                    message.payload.sessionId,
+                                    message.payload.trackName
+                                );
+                            }
+                            break;
+
+                        case 'track-status-changed':
+                            if (this._onTrackStatusChangedCallback) {
+                                this._onTrackStatusChangedCallback(message.payload);
+                            }
+                            break;
+
+                        case 'data-message':
+                            if (this._onDataMessageCallback) {
+                                this._onDataMessageCallback(message.payload);
+                            }
+                            break;
+
+                        case 'room-metadata-updated':
+                            if (this._onRoomMetadataUpdatedCallback) {
+                                this._onRoomMetadataUpdatedCallback(message.payload);
+                            }
+                            break;
+
+                        default:
+                            this._log('Unhandled message type:', message.type);
+                    }
+
+                    // Notify generic handlers
+                    this._wsMessageHandlers.forEach(handler => handler(message));
+                } catch (error) {
+                    this._error('Error processing WebSocket message:', error);
+                }
+            };
             
             this.ws.onerror = (err) => {
                 this._error('WebSocket error:', err);

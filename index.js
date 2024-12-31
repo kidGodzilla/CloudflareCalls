@@ -26,6 +26,7 @@ const CLOUDFLARE_APP_SECRET = process.env.CLOUDFLARE_APP_SECRET;
 const SECRET_KEY = process.env.JWT_SECRET || 'thisisjustademokey';
 const CLOUDFLARE_CALLS_BASE_URL = process.env.CLOUDFLARE_APPS_URL || 'https://rtc.live.cloudflare.com/v1/apps';
 const CLOUDFLARE_BASE_PATH = `${CLOUDFLARE_CALLS_BASE_URL}/${CLOUDFLARE_APP_ID}`;
+const DEBUG = process.env.DEBUG === 'true' || false;
 
 // Middleware to verify token from the Authorization header
 function verifyToken(req, res, next) {
@@ -144,7 +145,8 @@ if (process.env.NODE_ENV === 'development') {
             rooms: Object.fromEntries(rooms),
             roomCount: rooms.size,
             users: Array.from(users.entries()),
-            wsConnections: Object.keys(wsConnections)
+            wsConnections: Object.keys(wsConnections),
+            raw: rooms,
         };
 
         res.json(debug);
@@ -305,7 +307,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
             }
         }
 
-        console.log('Unpublishing track:', { roomId, sessionId, trackName, mid });
+        if (DEBUG) console.log('Unpublishing track:', { roomId, sessionId, trackName, mid });
 
         if (!mid) {
             return res.status(400).json({ 
@@ -316,7 +318,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
 
         // Call Cloudflare API to close the track
         const cfUrl = `${CLOUDFLARE_BASE_PATH}/sessions/${sessionId}/tracks/close`;
-        console.log('Calling Cloudflare API:', cfUrl);
+        if (DEBUG) console.log('Calling Cloudflare API:', cfUrl);
         
         const requestBody = {
             tracks: [{
@@ -325,7 +327,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
             force: Boolean(force)
         };
 
-        console.log('Request body:', JSON.stringify(requestBody, null, 2));
+        if (DEBUG) console.log('Request body:', JSON.stringify(requestBody, null, 2));
         
         const response = await fetch(cfUrl, {
             method: 'PUT',
@@ -337,14 +339,7 @@ app.post('/api/rooms/:roomId/sessions/:sessionId/unpublish', verifyToken, async 
         });
 
         const data = await response.json();
-        console.log('Cloudflare API response:', data);
-
-        // Update local state and broadcast
-        const room = rooms.get(roomId);
-        if (room) {
-            room.participants = room.participants.filter(p => p.sessionId !== sessionId);
-            console.log('Updated participants:', room.participants);
-        }
+        if (DEBUG) console.log('Cloudflare API response:', data);
 
         broadcastToRoom(roomId, {
             type: 'track-unpublished',
@@ -704,7 +699,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (ws) => {
-    console.log('New WebSocket connection.');
+    if (DEBUG) console.log('New WebSocket connection.');
     // ws.setNoDelay(true);
 
     ws.isAuthenticated = false;
@@ -724,7 +719,7 @@ wss.on('connection', (ws) => {
             case 'data-message':
                 if (AUTH_REQUIRED && !ws.isAuthenticated) {
                     ws.send(JSON.stringify({ error: 'Unauthorized: Please authenticate first' }));
-                    console.log('Unauthenticated websocket request to send data-message');
+                    if (DEBUG) console.log('Unauthenticated websocket request to send data-message');
                     return;
                 }
                 handleDataMessage(ws, data.payload);
@@ -824,10 +819,10 @@ function handleWSJoin(ws, { roomId, userId, token }) {
         }
         wsConnections[roomId][userId] = ws;
 
-        console.log(`User ${userId} joined room ${roomId} via WS`);
+        if (DEBUG) console.log(`User ${userId} joined room ${roomId} via WS`);
         ws.send(JSON.stringify({ message: 'Joined room successfully' }));
     } catch (err) {
-        console.warn('Invalid token in WS join:', err.message);
+        if (DEBUG) console.warn('Invalid token in WS join:', err.message);
         ws.send(JSON.stringify({ error: 'Invalid or expired token' }));
     }
 }
@@ -840,7 +835,7 @@ function handleWSDisconnect(ws) {
     for (const [rId, userMap] of Object.entries(wsConnections)) {
         for (const [uId, sock] of Object.entries(userMap)) {
             if (sock === ws) {
-                console.log(`User ${uId} disconnected from room ${rId}`);
+                if (DEBUG) console.log(`User ${uId} disconnected from room ${rId}`);
                 delete wsConnections[rId][uId];
             }
         }
@@ -854,7 +849,7 @@ function handleWSDisconnect(ws) {
  * @param {string|null} excludeUserId - The user ID to exclude from broadcasting.
  */
 function broadcastToRoom(roomId, message, excludeUserId = null) {
-    console.log('Broadcasting to room:', { roomId, message, excludeUserId });
+    if (DEBUG) console.log('Broadcasting to room:', { roomId, message, excludeUserId });
     if (!rooms.has(roomId)) return;
 
     if (!wsConnections[roomId]) return;
@@ -862,7 +857,7 @@ function broadcastToRoom(roomId, message, excludeUserId = null) {
         if (userId === excludeUserId) continue;
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(message));
-            console.log('Sent WebSocket message to user:', userId, message);
+            if (DEBUG) console.log('Sent WebSocket message to user:', userId, message);
         }
     }
 }
@@ -1005,24 +1000,34 @@ app.get('/api/users/:userId', verifyToken, (req, res) => {
 });
 
 // Update leave room to clean up user info
-app.post('/api/rooms/:roomId/leave', verifyToken, (req, res) => {
+app.post('/api/rooms/:roomId/leave', verifyToken, async (req, res) => {
     const { roomId } = req.params;
-    const { userId } = req.user;
+    const { sessionId } = req.body;
 
-    // Clean up user's room and session info
-    const userInfo = users.get(userId);
-    if (userInfo) {
-        delete userInfo.sessionId;
-        delete userInfo.roomId;
+    if (!rooms.has(roomId)) {
+        return res.status(404).json({ error: 'Room not found' });
     }
 
     const room = rooms.get(roomId);
-    if (room) {
-        room.participants = room.participants.filter(p => p.userId !== userId);
+    const participantIndex = room.participants.findIndex(p => p.sessionId === sessionId);
+
+    if (participantIndex !== -1) {
+        const participant = room.participants[participantIndex];
+        room.participants.splice(participantIndex, 1);
+
+        // Notify other participants about the leave
+        broadcastToRoom(roomId, {
+            type: 'participant-left',
+            payload: {
+                sessionId,
+                userId: participant.userId,
+                metadata: participant.metadata
+            }
+        }, sessionId);
+
+        // If room is empty, delete it
         if (room.participants.length === 0) {
-            rooms.delete(roomId);  // Remove empty rooms
-        } else {
-            rooms.set(roomId, room);
+            rooms.delete(roomId);
         }
     }
 
