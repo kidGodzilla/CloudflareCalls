@@ -59,6 +59,6 @@ You can see an example of this flow in the example included at `public/index.htm
 - ~~Tracks are not correctly unpublished in most cases~~
 - ~~Participant list (text list) does not update properly~~
 - ~~Screen sharing does not work~~
+- ~~Leave existing room when clicking Join Room button in room list~~
 - Cannot publish tracks after unpublishing tracks
-- Leave existing room when clicking Join Room button in room list
 - More..
