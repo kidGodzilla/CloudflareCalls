@@ -464,12 +464,12 @@ class CloudflareCalls {
      */
     async unpublishTrack(trackKind, force = false) {
         if (!this.peerConnection) {
-            throw new Error('PeerConnection is not established.');
+            return this._warn('PeerConnection is not established.');
         }
 
         const sender = this.peerConnection.getSenders().find(s => s.track?.kind === trackKind);
         if (!sender) {
-            throw new Error(`No ${trackKind} track found to unpublish.`);
+            return this._warn(`No ${trackKind} track found to unpublish.`);
         }
 
         const transceiver = this.peerConnection.getTransceivers().find(t => t.sender === sender);
@@ -558,7 +558,7 @@ class CloudflareCalls {
      */
     async updatePublishedTracks() {
         if (!this.peerConnection) {
-            throw new Error('PeerConnection is not established.');
+            return this._warn('PeerConnection is not established.');
         }
 
         // Remove existing senders
@@ -755,9 +755,6 @@ class CloudflareCalls {
         } catch (error) {
             this._error('Error fetching ICE servers:', error);
             // Fallback to default ICE servers if fetching fails
-            iceServers = [
-                { urls: 'stun:stun.cloudflare.com:3478' },
-            ];
         }
 
         const pc = new RTCPeerConnection({
@@ -1234,7 +1231,7 @@ class CloudflareCalls {
      */
     async listParticipants() {
         if (!this.roomId) {
-            throw new Error('Not connected to any room.');
+            return this._warn('Not connected to any room.');
         }
 
         const resp = await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/participants`)
@@ -1559,7 +1556,7 @@ class CloudflareCalls {
      */
     async updateRoomMetadata(updates) {
         if (!this.roomId) {
-            throw new Error('Not connected to any room');
+            return this._warn('Not connected to any room');
         }
 
         return await this._fetch(`${this.backendUrl}/api/rooms/${this.roomId}/metadata`, {
@@ -1605,7 +1602,7 @@ class CloudflareCalls {
         if (typeof quality === 'string') {
             const preset = CloudflareCalls.QUALITY_PRESETS[quality];
             if (!preset) {
-                throw new Error(`Unknown quality preset: ${quality}`);
+                return this._warn(`Unknown quality preset: ${quality}`);
             }
             this.mediaQuality = quality;
             quality = preset;
@@ -1710,7 +1707,7 @@ class CloudflareCalls {
      */
     async _gatherConnectionStats() {
         if (!this.peerConnection) {
-            throw new Error('No active connection');
+            return this._warn('No active connection');
         }
 
         const stats = await this.peerConnection.getStats();
