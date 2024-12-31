@@ -65,6 +65,7 @@ class CloudflareCalls {
     constructor(config = {}) {
         this.backendUrl = config.backendUrl || '';
         this.websocketUrl = config.websocketUrl || '';
+        this.debug = config.debug || false;
 
         this.token = null;
         this.roomId = null;
@@ -125,6 +126,45 @@ class CloudflareCalls {
     }
 
     /**
+     * Internal logging method that only outputs when debug is enabled
+     * @private
+     * @param {...any} args - Arguments to pass to console.log
+     */
+    _log(...args) {
+        if (this.debug) {
+            console.log('[CloudflareCalls]', ...args);
+        }
+    }
+
+    /**
+     * Internal warning method that only outputs when debug is enabled
+     * @private
+     * @param {...any} args - Arguments to pass to console.warn
+     */
+    _warn(...args) {
+        if (this.debug) {
+            console.warn('[CloudflareCalls]', ...args);
+        }
+    }
+
+    /**
+     * Internal error method that always outputs (important for debugging)
+     * @private
+     * @param {...any} args - Arguments to pass to console.error
+     */
+    _error(...args) {
+        console.error('[CloudflareCalls]', ...args);
+    }
+
+    /**
+     * Enable or disable debug logging
+     * @param {boolean} enabled - Whether to enable debug logging
+     */
+    setDebugMode(enabled) {
+        this.debug = Boolean(enabled);
+    }
+
+    /**
      * Internal method to perform fetch requests with automatic token inclusion and JSON parsing.
      * @private
      * @param {string} url - The full URL to fetch.
@@ -152,7 +192,7 @@ class CloudflareCalls {
 
             return response;
         } catch (error) {
-            console.error(`Fetch error for ${url}:`, error);
+            this._error(`Fetch error for ${url}:`, error);
             throw error;
         }
     }
@@ -265,7 +305,7 @@ class CloudflareCalls {
      */
     async _updateUserMetadataOnServer() {
         if (!this.roomId || !this.sessionId) {
-            console.warn('Cannot update metadata before joining a room.');
+            this._warn('Cannot update metadata before joining a room.');
             return;
         }
 
@@ -278,12 +318,12 @@ class CloudflareCalls {
             });
 
             if (!response.ok) {
-                console.error('Failed to update user metadata on server.');
+                this._error('Failed to update user metadata on server.');
             } else {
-                console.log('User metadata updated on server.');
+                this._log('User metadata updated on server.');
             }
         } catch (error) {
-            console.error('Error updating user metadata:', error);
+            this._error('Error updating user metadata:', error);
             throw error;
         }
     }
@@ -347,7 +387,7 @@ class CloudflareCalls {
         // 3) Get Local Media and Publish Tracks
         if (!this.localStream) {
             this.localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            console.log('Acquired local media');
+            this._log('Acquired local media');
         }
         await this._publishTracks();
 
@@ -359,7 +399,7 @@ class CloudflareCalls {
                 await this._pullTracks(s.sessionId, tName);
             }
         }
-        console.log('Joined room', roomId, 'my session:', this.sessionId);
+        this._log('Joined room', roomId, 'my session:', this.sessionId);
 
         this.setUserMetadata(metadata);
 
@@ -385,7 +425,7 @@ class CloudflareCalls {
             this.ws.close();
             this.ws = null;
         }
-        console.log('Left room, closed PC & WS');
+        this._log('Left room, closed PC & WS');
 
         // Stop polling
         if (this.pollingInterval) {
@@ -462,7 +502,7 @@ class CloudflareCalls {
 
             return result;
         } catch (error) {
-            console.error(`Error unpublishing ${trackKind} track:`, error);
+            this._error(`Error unpublishing ${trackKind} track:`, error);
             throw error;
         }
     }
@@ -482,14 +522,14 @@ class CloudflareCalls {
 
         this._renegotiateTimeout = setTimeout(async () => {
             try {
-                console.log('Starting renegotiation process...');
+                this._log('Starting renegotiation process...');
                 const answer = await this.peerConnection.createAnswer();
-                console.log('Created renegotiation answer:', answer.sdp);
+                this._log('Created renegotiation answer:', answer.sdp);
                 await this.peerConnection.setLocalDescription(answer);
 
                 const renegotiateUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/renegotiate`;
                 const body = { sdp: answer.sdp, type: answer.type };
-                console.log(`Sending renegotiate request to ${renegotiateUrl} with body:`, body);
+                this._log(`Sending renegotiate request to ${renegotiateUrl} with body:`, body);
 
                 const response = await this._fetch(renegotiateUrl, {
                     method: 'PUT',
@@ -498,14 +538,14 @@ class CloudflareCalls {
                 }).then(r => r.json());
 
                 if (response.errorCode) {
-                    console.error('Renegotiation failed:', response.errorDescription);
+                    this._error('Renegotiation failed:', response.errorDescription);
                     return;
                 }
 
                 await this.peerConnection.setRemoteDescription(response.sessionDescription);
-                console.log('Renegotiation successful. Applied SFU response.');
+                this._log('Renegotiation successful. Applied SFU response.');
             } catch (error) {
-                console.error('Error during renegotiation:', error);
+                this._error('Error during renegotiation:', error);
             }
         }, 500);
     }
@@ -564,7 +604,7 @@ class CloudflareCalls {
         if (transceivers.length === 0) return;  // No new tracks to publish
 
         const offer = await this.peerConnection.createOffer();
-        console.log('SDP Offer:', offer.sdp);
+        this._log('SDP Offer:', offer.sdp);
         await this.peerConnection.setLocalDescription(offer);
 
         const trackInfos = transceivers.map(({ sender, mid }) => ({
@@ -586,13 +626,13 @@ class CloudflareCalls {
         }).then(r => r.json());
 
         if (resp.errorCode) {
-            console.error('Publish error:', resp.errorDescription);
+            this._error('Publish error:', resp.errorDescription);
             return;
         }
         // The SFU's answer
         const answer = resp.sessionDescription;
         await this.peerConnection.setRemoteDescription(answer);
-        console.log('Publish => success. Applied SFU answer.');
+        this._log('Publish => success. Applied SFU answer.');
     }
 
     /**
@@ -604,7 +644,7 @@ class CloudflareCalls {
      * @returns {Promise<void>}
      */
     async _pullTracks(remoteSessionId, trackName) {
-        console.log(`Pulling track '${trackName}' from session ${remoteSessionId}`);
+        this._log(`Pulling track '${trackName}' from session ${remoteSessionId}`);
         const pullUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/pull`;
         const body = { remoteSessionId, trackName };
 
@@ -615,12 +655,12 @@ class CloudflareCalls {
         }).then(r => r.json());
 
         if (resp.errorCode) {
-            console.error('Pull error:', resp.errorDescription);
+            this._error('Pull error:', resp.errorDescription);
             return;
         }
 
         if (resp.requiresImmediateRenegotiation) {
-            console.log('Pull => requires renegotiation');
+            this._log('Pull => requires renegotiation');
             
             // Set up both mappings from the SDP
             const pendingMids = new Set();
@@ -630,7 +670,7 @@ class CloudflareCalls {
                     pendingMids.add(mid);
                     this.midToSessionId.set(mid, remoteSessionId);
                     this.midToTrackName.set(mid, trackName);
-                    console.log('Pre-mapped MID:', {
+                    this._log('Pre-mapped MID:', {
                         mid,
                         sessionId: remoteSessionId,
                         trackName
@@ -649,7 +689,7 @@ class CloudflareCalls {
             const transceivers = this.peerConnection.getTransceivers();
             transceivers.forEach(transceiver => {
                 if (transceiver.mid && pendingMids.has(transceiver.mid)) {
-                    console.log('Verified MID mapping:', {
+                    this._log('Verified MID mapping:', {
                         mid: transceiver.mid,
                         sessionId: remoteSessionId,
                         direction: transceiver.direction
@@ -664,8 +704,8 @@ class CloudflareCalls {
             });
         }
 
-        console.log(`Pulled trackName="${trackName}" from session ${remoteSessionId}`);
-        console.log('Current MID mappings:', Array.from(this.midToSessionId.entries()));
+        this._log(`Pulled trackName="${trackName}" from session ${remoteSessionId}`);
+        this._log('Current MID mappings:', Array.from(this.midToSessionId.entries()));
 
         // Record the pulled track
         if (!this.pulledTracks.has(remoteSessionId)) {
@@ -708,12 +748,12 @@ class CloudflareCalls {
                     }
                     return iceServer;
                 });
-                console.log('Fetched ICE servers:', iceServers);
+                this._log('Fetched ICE servers:', iceServers);
             } else {
                 throw new Error('Invalid ICE servers format received from /api/ice-servers');
             }
         } catch (error) {
-            console.error('Error fetching ICE servers:', error);
+            this._error('Error fetching ICE servers:', error);
             // Fallback to default ICE servers if fetching fails
             iceServers = [
                 { urls: 'stun:stun.cloudflare.com:3478' },
@@ -728,31 +768,31 @@ class CloudflareCalls {
 
         pc.onicecandidate = (evt) => {
             if (evt.candidate) {
-                console.log('New ICE candidate:', evt.candidate.candidate);
+                this._log('New ICE candidate:', evt.candidate.candidate);
             } else {
-                console.log('All ICE candidates have been sent');
+                this._log('All ICE candidates have been sent');
             }
         };
 
         pc.oniceconnectionstatechange = () => {
-            console.log('ICE Connection State:', pc.iceConnectionState);
+            this._log('ICE Connection State:', pc.iceConnectionState);
             if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
                 this.leaveRoom();
             }
         };
 
         pc.onconnectionstatechange = () => {
-            console.log('Connection State:', pc.connectionState);
+            this._log('Connection State:', pc.connectionState);
             if (pc.connectionState === 'connected') {
-                console.log('Peer connection fully established');
+                this._log('Peer connection fully established');
             } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-                console.log('Peer connection disconnected or failed');
+                this._log('Peer connection disconnected or failed');
                 this.leaveRoom();
             }
         };
 
         pc.ontrack = (evt) => {
-            console.log('ontrack event:', {
+            this._log('ontrack event:', {
                 kind: evt.track.kind,
                 webrtcTrackId: evt.track.id,
                 mid: evt.transceiver?.mid
@@ -763,7 +803,7 @@ class CloudflareCalls {
                 const sessionId = this.midToSessionId.get(mid);
                 const trackName = this.midToTrackName.get(mid);
 
-                console.log('Track mapping lookup:', {
+                this._log('Track mapping lookup:', {
                     mid,
                     sessionId,
                     trackName,
@@ -775,7 +815,7 @@ class CloudflareCalls {
                 });
 
                 if (!sessionId) {
-                    console.warn('No sessionId found for mid:', mid);
+                    this._warn('No sessionId found for mid:', mid);
                     if (!this.pendingTracks) this.pendingTracks = [];
                     this.pendingTracks.push({ evt, mid });
                     return;
@@ -786,7 +826,7 @@ class CloudflareCalls {
                 wrappedTrack.mid = mid;
                 wrappedTrack.trackName = trackName;
 
-                console.log('Sending track to callback:', {
+                this._log('Sending track to callback:', {
                     webrtcTrackId: wrappedTrack.id,
                     trackName: wrappedTrack.trackName,
                     sessionId: wrappedTrack.sessionId,
@@ -813,7 +853,7 @@ class CloudflareCalls {
             this.ws = new WebSocket(this.websocketUrl);
             
             this.ws.onopen = () => {
-                console.log('WebSocket open');
+                this._log('WebSocket open');
                 this.ws.send(JSON.stringify({
                     type: 'join-websocket',
                     payload: { 
@@ -828,12 +868,12 @@ class CloudflareCalls {
             this.ws.onmessage = this._handleWebSocketMessage.bind(this);
             
             this.ws.onerror = (err) => {
-                console.error('WebSocket error:', err);
+                this._error('WebSocket error:', err);
                 reject(err);
             };
 
             this.ws.onclose = () => {
-                console.log('WebSocket closed');
+                this._log('WebSocket connection closed');
             };
         });
     }
@@ -864,13 +904,13 @@ class CloudflareCalls {
 
                     for (const trackName of publishedTracks) {
                         if (!this.pulledTracks.get(sessionId).has(trackName)) {
-                            console.log(`[Polling] New track detected: ${trackName} from session ${sessionId}`);
+                            this._log(`[Polling] New track detected: ${trackName} from session ${sessionId}`);
                             await this._pullTracks(sessionId, trackName);
                         }
                     }
                 }
             } catch (err) {
-                console.error('Polling error:', err);
+                this._error('Polling error:', err);
             }
         }, 10000);
     }
@@ -905,7 +945,7 @@ class CloudflareCalls {
      */
     async selectAudioInputDevice(deviceId) {
         if (!deviceId) {
-            console.warn('No deviceId provided for audio input.');
+            this._warn('No deviceId provided for audio input.');
             return;
         }
 
@@ -927,9 +967,9 @@ class CloudflareCalls {
                 await this._publishTracks();
             }
 
-            console.log(`Switched to audio input device: ${deviceId}`);
+            this._log(`Switched to audio input device: ${deviceId}`);
         } catch (error) {
-            console.error('Error switching audio input device:', error);
+            this._error('Error switching audio input device:', error);
         }
     }
 
@@ -941,7 +981,7 @@ class CloudflareCalls {
      */
     async selectVideoInputDevice(deviceId) {
         if (!deviceId) {
-            console.warn('No deviceId provided for video input.');
+            this._warn('No deviceId provided for video input.');
             return;
         }
 
@@ -963,9 +1003,9 @@ class CloudflareCalls {
                 await this._publishTracks();
             }
 
-            console.log(`Switched to video input device: ${deviceId}`);
+            this._log(`Switched to video input device: ${deviceId}`);
         } catch (error) {
-            console.error('Error switching video input device:', error);
+            this._error('Error switching video input device:', error);
         }
     }
 
@@ -977,7 +1017,7 @@ class CloudflareCalls {
      */
     async selectAudioOutputDevice(deviceId) {
         if (!deviceId) {
-            console.warn('No deviceId provided for audio output.');
+            this._warn('No deviceId provided for audio output.');
             return;
         }
 
@@ -987,9 +1027,9 @@ class CloudflareCalls {
                 await audio.setSinkId(deviceId);
             }
             this.currentAudioOutputDeviceId = deviceId;
-            console.log(`Switched to audio output device: ${deviceId}`);
+            this._log(`Switched to audio output device: ${deviceId}`);
         } catch (error) {
-            console.error('Error switching audio output device:', error);
+            this._error('Error switching audio output device:', error);
         }
     }
 
@@ -1002,15 +1042,15 @@ class CloudflareCalls {
      */
     async setAudioOutputDevice(mediaElement, deviceId) {
         if (!deviceId) {
-            console.warn('No deviceId provided for audio output.');
+            this._warn('No deviceId provided for audio output.');
             return;
         }
 
         try {
             await mediaElement.setSinkId(deviceId);
-            console.log(`Set audio output device for media element to: ${deviceId}`);
+            this._log(`Set audio output device for media element to: ${deviceId}`);
         } catch (error) {
-            console.error('Error setting audio output device:', error);
+            this._error('Error setting audio output device:', error);
         }
     }
 
@@ -1045,7 +1085,7 @@ class CloudflareCalls {
             }
             return stream;
         } catch (error) {
-            console.error('Error previewing media:', error);
+            this._error('Error previewing media:', error);
             throw error;
         }
     }
@@ -1123,7 +1163,7 @@ class CloudflareCalls {
                 await this._publishTracks();
             };
         } catch (err) {
-            console.error('Error sharing screen:', err);
+            this._error('Error sharing screen:', err);
             throw err;
         }
     }
@@ -1175,11 +1215,11 @@ class CloudflareCalls {
      */
     _sendWebSocketMessage(data) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.warn('WebSocket is not open. Cannot send message.');
+            this._warn('WebSocket is not open. Cannot send message.');
             return;
         }
         this.ws.send(JSON.stringify(data));
-        console.log('Sent WebSocket message:', data);
+        this._log('Sent WebSocket message:', data);
     }
 
     /************************************************
@@ -1242,7 +1282,7 @@ class CloudflareCalls {
      */
     async unpublishAllTracks(trackKind) {
         if (!this.peerConnection) {
-            console.warn('PeerConnection is not established.');
+            this._warn('PeerConnection is not established.');
             return;
         }
 
@@ -1250,7 +1290,7 @@ class CloudflareCalls {
         if (trackKind) {
             senders = senders.filter(s => s.track && s.track.kind === trackKind);
         }
-        console.log('Unpublishing all tracks:', senders.length);
+        this._log('Unpublishing all tracks:', senders.length);
         
         for (const sender of senders) {
             if (sender.track) {
@@ -1259,10 +1299,10 @@ class CloudflareCalls {
                     const transceiver = this.peerConnection.getTransceivers().find(t => t.sender === sender);
                     const mid = transceiver ? transceiver.mid : null;
                     
-                    console.log('Unpublishing track:', { trackId, mid });
+                    this._log('Unpublishing track:', { trackId, mid });
                     
                     if (!mid) {
-                        console.warn('No mid found for track:', trackId);
+                        this._warn('No mid found for track:', trackId);
                         continue;
                     }
 
@@ -1285,9 +1325,9 @@ class CloudflareCalls {
                     // Remove from our tracked set
                     this.publishedTracks.delete(trackId);
                     
-                    console.log(`Successfully unpublished track: ${trackId}`);
+                    this._log(`Successfully unpublished track: ${trackId}`);
                 } catch (error) {
-                    console.error(`Error unpublishing track:`, error);
+                    this._error(`Error unpublishing track:`, error);
                 }
             }
         }
@@ -1316,7 +1356,7 @@ class CloudflareCalls {
             
             return state;
         } catch (error) {
-            console.error('Error getting session state:', error);
+            this._error('Error getting session state:', error);
             throw error;
         }
     }
@@ -1371,7 +1411,7 @@ class CloudflareCalls {
 
             return result;
         } catch (error) {
-            console.error(`Error updating track status:`, error);
+            this._error(`Error updating track status:`, error);
             throw error;
         }
     }
@@ -1404,7 +1444,7 @@ class CloudflareCalls {
             );
             return await response.json();
         } catch (error) {
-            console.error('Error getting user info:', error);
+            this._error('Error getting user info:', error);
             throw error;
         }
     }
@@ -1418,14 +1458,14 @@ class CloudflareCalls {
     _handleWebSocketMessage(event) {
         try {
             const message = JSON.parse(event.data);
-            console.log('WebSocket message received:', message);
+            this._log('WebSocket message received:', message);
 
             // First, notify generic handlers
             this._wsMessageHandlers.forEach(handler => {
                 try {
                     handler(message);
                 } catch (err) {
-                    console.error('Error in WebSocket message handler:', err);
+                    this._error('Error in WebSocket message handler:', err);
                 }
             });
 
@@ -1478,10 +1518,10 @@ class CloudflareCalls {
                     break;
 
                 default:
-                    console.log('Unhandled message type:', message.type);
+                    this._log('Unhandled message type:', message.type);
             }
         } catch (error) {
-            console.error('Error handling WebSocket message:', error);
+            this._error('Error handling WebSocket message:', error);
         }
     }
 

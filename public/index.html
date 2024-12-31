@@ -339,6 +339,7 @@
 
     const calls = new CloudflareCalls();
     window.calls = calls; // for debugging
+    calls.setDebugMode(false); // Disable debug logging
 
     const localVideo = document.getElementById('localVideo');
     const videosContainer = document.getElementById('videos');
@@ -902,7 +903,7 @@
 
     // Use generic handler for debugging or custom handling
     calls.onWebSocketMessage(msg => {
-        console.log('WebSocket message received (generic):', msg);
+        // console.log('WebSocket message received (generic):', msg);
     });
 
     // Add connection status monitoring
