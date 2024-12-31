@@ -407,9 +407,10 @@ class CloudflareCalls {
     }
 
     /**
-     * Leaves the current room and cleans up connections.
+     * Cleans up ended tracks in localStream
      * @async
-     * @returns {Promise<void>}
+     * @private
+     * @returns {void}
      */
     async _cleanupEndedTracks() {
         // Clear local media devices (readyState == 'ended', so they can't be reused)
@@ -427,6 +428,12 @@ class CloudflareCalls {
             this.localStream = null;
         }
     }
+
+    /**
+     * Leaves the current room and cleans up connections.
+     * @async
+     * @returns {Promise<void>}
+     */
     async leaveRoom() {
         if (!this.roomId || !this.sessionId) return;
 
@@ -488,67 +495,68 @@ class CloudflareCalls {
         await this._publishTracks();
     }
 
-    /**
-     * Unpublishes a specific local media track (audio or video).
-     * @async
-     * @param {string} trackKind - The kind of track to unpublish ('audio' or 'video').
-     * @param {boolean} [force=false] - If true, forces track closure without renegotiation.
-     * @returns {Promise<Object>} Result object from the Cloudflare API.
-     * @throws {Error} If PeerConnection is not established or track is not found.
-     */
-    async unpublishTrack(trackKind, force = false) {
-        if (!this.peerConnection) {
-            return this._warn('PeerConnection is not established.');
-        }
-
-        const sender = this.peerConnection.getSenders().find(s => s.track?.kind === trackKind);
-        if (!sender) {
-            return this._warn(`No ${trackKind} track found to unpublish.`);
-        }
-
-        const transceiver = this.peerConnection.getTransceivers().find(t => t.sender === sender);
-        if (!transceiver?.mid) {
-            throw new Error('Could not find transceiver mid for track');
-        }
-
-        try {
-            // Create an offer for the updated state
-            const offer = await this.peerConnection.createOffer();
-            await this.peerConnection.setLocalDescription(offer);
-
-            const unpublishUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`;
-            const response = await this._fetch(unpublishUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    trackName: sender.track.id,
-                    mid: transceiver.mid,
-                    force,
-                    sessionDescription: {
-                        type: offer.type,
-                        sdp: offer.sdp
-                    }
-                })
-            });
-
-            if (!response || !response.ok) return false;
-            const result = await response.json();
-
-            // Stop the track
-            sender.track.stop();
-
-            // Remove from PeerConnection after server confirms
-            this.peerConnection.removeTrack(sender);
-
-            // Remove from our tracked set
-            this.publishedTracks.delete(sender.track.id);
-
-            return result;
-        } catch (error) {
-            this._warn(`Error unpublishing ${trackKind} track:`, error);
-            return false;
-        }
-    }
+    // /**
+    //  * Unpublishes a specific local media track (audio or video).
+    //  * @async
+    //  * @param {string} trackKind - The kind of track to unpublish ('audio' or 'video').
+    //  * @param {boolean} [force=false] - If true, forces track closure without renegotiation.
+    //  * @returns {Promise<Object>} Result object from the Cloudflare API.
+    //  * @throws {Error} If PeerConnection is not established or track is not found.
+    //  */
+    // // Todo: I don't think this method works
+    // async unpublishTrack(trackKind, force = false) {
+    //     if (!this.peerConnection) {
+    //         return this._warn('PeerConnection is not established.');
+    //     }
+    //
+    //     const sender = this.peerConnection.getSenders().find(s => s.track?.kind === trackKind);
+    //     if (!sender) {
+    //         return this._warn(`No ${trackKind} track found to unpublish.`);
+    //     }
+    //
+    //     const transceiver = this.peerConnection.getTransceivers().find(t => t.sender === sender);
+    //     if (!transceiver?.mid) {
+    //         throw new Error('Could not find transceiver mid for track');
+    //     }
+    //
+    //     try {
+    //         // Create an offer for the updated state
+    //         const offer = await this.peerConnection.createOffer();
+    //         await this.peerConnection.setLocalDescription(offer);
+    //
+    //         const unpublishUrl = `${this.backendUrl}/api/rooms/${this.roomId}/sessions/${this.sessionId}/unpublish`;
+    //         const response = await this._fetch(unpublishUrl, {
+    //             method: 'POST',
+    //             headers: { 'Content-Type': 'application/json' },
+    //             body: JSON.stringify({
+    //                 trackName: sender.track.id,
+    //                 mid: transceiver.mid,
+    //                 force,
+    //                 sessionDescription: {
+    //                     type: offer.type,
+    //                     sdp: offer.sdp
+    //                 }
+    //             })
+    //         });
+    //
+    //         if (!response || !response.ok) return false;
+    //         const result = await response.json();
+    //
+    //         // Stop the track
+    //         sender.track.stop();
+    //
+    //         // Remove from PeerConnection after server confirms
+    //         this.peerConnection.removeTrack(sender);
+    //
+    //         // Remove from our tracked set
+    //         this.publishedTracks.delete(sender.track.id);
+    //
+    //         return result;
+    //     } catch (error) {
+    //         this._warn(`Error unpublishing ${trackKind} track:`, error);
+    //         return false;
+    //     }
+    // }
 
     /**
      * Initiates renegotiation of the PeerConnection.
@@ -599,6 +607,8 @@ class CloudflareCalls {
      * @returns {Promise<void>}
      * @throws {Error} If the PeerConnection is not established.
      */
+    // Todo: I don't know what this was supposed to accomplish
+    // Possibly unpublish and re-publish tracks to solve some lifecycle issue
     async updatePublishedTracks() {
         if (!this.peerConnection) {
             return this._warn('PeerConnection is not established.');
@@ -1141,35 +1151,6 @@ class CloudflareCalls {
     }
 
     /**
-     * Sets the audio output device for a specific media element.
-     * @async
-     * @param {HTMLMediaElement} mediaElement - The media element to set the output device for.
-     * @param {string} deviceId - The ID of the audio output device to set.
-     * @returns {Promise<void>}
-     */
-    async setAudioOutputDevice(mediaElement, deviceId) {
-        if (!deviceId) {
-            this._warn('No deviceId provided for audio output.');
-            return;
-        }
-
-        try {
-            await mediaElement.setSinkId(deviceId);
-            this._log(`Set audio output device for media element to: ${deviceId}`);
-        } catch (error) {
-            this._error('Error setting audio output device:', error);
-        }
-    }
-
-    /**
-     * Retrieves the current audio output device ID.
-     * @returns {string|null} The current audio output device ID, or null if not set.
-     */
-    getCurrentAudioOutputDeviceId() {
-        return this.currentAudioOutputDeviceId;
-    }
-
-    /**
      * Previews media streams with specified device IDs.
      * @async
      * @param {Object} params - Parameters for media preview.
@@ -1281,41 +1262,6 @@ class CloudflareCalls {
      ***********************************************/
 
     /**
-     * Send a data message to all participants in the room via WebSocket.
-     * @param {Object} message - The JSON object to send.
-     * @returns {void}
-     */
-    sendDataToAll(message) {
-        const data = {
-            type: 'data-message',
-            payload: {
-                from: this.userId,
-                to: 'all', // Special identifier for broadcasting
-                message
-            }
-        };
-        this._sendWebSocketMessage(data);
-    }
-
-    /**
-     * Send a data message to a specific participant via WebSocket.
-     * @param {string} participantId - The userId of the target participant.
-     * @param {Object} message - The JSON object to send.
-     * @returns {void}
-     */
-    sendDataToParticipant(participantId, message) {
-        const data = {
-            type: 'data-message',
-            payload: {
-                from: this.userId,
-                to: participantId, // Target participant's userId
-                message
-            }
-        };
-        this._sendWebSocketMessage(data);
-    }
-
-    /**
      * Internal method to send a message via WebSocket.
      * @private
      * @param {Object} data - The data object to send.
@@ -1368,27 +1314,13 @@ class CloudflareCalls {
     }
 
     /**
-     * Sends a POST request to a specified API path with a JSON body.
+     * Unpublishes all currently published tracks (with filters for type)
      * @async
-     * @param {string} apiPath - The API path to send the request to.
-     * @param {Object} body - The JSON body to include in the request.
-     * @returns {Promise<Object>} The JSON response from the server.
-     */
-    async sendRequest(apiPath, body) {
-        const response = await this._fetch(`${this.backendUrl}${apiPath}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        return response.json();
-    }
-
-    /**
-     * Unpublishes all currently published tracks
-     * @async
+     * @param {string} trackKind - The kind of track to unpublish ('audio' or 'video').
+     * @param {boolean} [force=false] - If true, forces track closure without renegotiation.
      * @returns {Promise<void>}
      */
-    async unpublishAllTracks(trackKind) {
+    async unpublishAllTracks(trackKind, force = false) {
         if (!this.peerConnection) {
             this._warn('PeerConnection is not established.');
             return;
@@ -1428,6 +1360,7 @@ class CloudflareCalls {
                         body: JSON.stringify({
                             trackName: trackId,
                             mid: mid,
+                            force,
                             sessionDescription: {
                                 type: offer.type,
                                 sdp: offer.sdp
@@ -1689,9 +1622,9 @@ class CloudflareCalls {
     }
 
     /**
-     * Sends a data message to all participants in the current room
-     * @async
-     * @param {*} data - The data to send
+     * Send a data message to all participants in the room via WebSocket.
+     * @param {Object} data - The JSON object to send.
+     * @returns {void}
      */
     async sendDataToAll(data) {
         if (!this.roomId || !this.sessionId) {
