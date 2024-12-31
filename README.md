@@ -50,15 +50,3 @@ Additionally, Cloudflare recommends the inclusion of the [webrtc-adapter](https:
 6. [Join a room](https://cloudflarecalls.jamesfuthey.com/docs/CloudflareCalls.html#joinRoom) (by GUID)
 
 You can see an example of this flow in the example included at `public/index.html`.
-
-# Not yet implemented
-
-- ~~SFU datachannels are not implemented (and probably only make sense for file transfers)~~
-- ~~You cannot enable/disable audio or video~~
-- ~~You cannot switch inputs after a track has been published~~
-- ~~Tracks are not correctly unpublished in most cases~~
-- ~~Participant list (text list) does not update properly~~
-- ~~Screen sharing does not work~~
-- ~~Leave existing room when clicking Join Room button in room list~~
-- ~~Cannot publish tracks after unpublishing tracks~~
-- More..
