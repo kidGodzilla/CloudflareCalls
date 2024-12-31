@@ -6,7 +6,7 @@
   "browser": "public/CloudflareCalls.min.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "rollup": "rollup public/CloudflareCalls.js --file public/CloudflareCalls.min.js --format umd --name \"CloudflareCalls\"",
+    "rollup": "rollup public/CloudflareCalls.js --file public/CloudflareCalls.min.js --format umd --name \"CloudflareCalls\" --plugin @rollup/plugin-terser",
     "apidocs": "apidoc -i ./ -e \"(node_modules|public)\" -o public/docs/api",
     "docs": "jsdoc -c jsdoc.json",
     "build": "npm run docs && mkdir -p public/docs/api && npm run apidocs && npm run rollup",
@@ -15,6 +15,7 @@
   "author": "James Futhey",
   "license": "MIT",
   "dependencies": {
+    "@rollup/plugin-terser": "^0.4.4",
     "apidoc": "^1.2.0",
     "docdash": "^2.0.2",
     "dotenv": "^16.4.7",
