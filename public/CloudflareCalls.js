@@ -2232,6 +2232,147 @@ class CloudflareCalls {
                 maxBitrate: 100_000
             },
             audio: { maxBitrate: 24000, sampleRate: 22050, channelCount: 1 }
+        },
+
+        // 9:16 High Quality Presets (Portrait/Mobile)
+        high_9x16_xl: {  // 1080x1920
+            video: {
+                width: { ideal: 1080 },
+                height: { ideal: 1920 },
+                frameRate: { ideal: 30 },
+                maxBitrate: 2_500_000
+            },
+            audio: { maxBitrate: 128000, sampleRate: 48000, channelCount: 2 }
+        },
+        high_9x16_lg: {  // 720x1280
+            video: {
+                width: { ideal: 720 },
+                height: { ideal: 1280 },
+                frameRate: { ideal: 30 },
+                maxBitrate: 1_500_000
+            },
+            audio: { maxBitrate: 96000, sampleRate: 48000, channelCount: 1 }
+        },
+        high_9x16_md: {  // 480x854
+            video: {
+                width: { ideal: 480 },
+                height: { ideal: 854 },
+                frameRate: { ideal: 30 },
+                maxBitrate: 800_000
+            },
+            audio: { maxBitrate: 96000, sampleRate: 44100, channelCount: 1 }
+        },
+        high_9x16_sm: {  // 360x640
+            video: {
+                width: { ideal: 360 },
+                height: { ideal: 640 },
+                frameRate: { ideal: 30 },
+                maxBitrate: 600_000
+            },
+            audio: { maxBitrate: 64000, sampleRate: 44100, channelCount: 1 }
+        },
+        high_9x16_xs: {  // 270x480
+            video: {
+                width: { ideal: 270 },
+                height: { ideal: 480 },
+                frameRate: { ideal: 30 },
+                maxBitrate: 400_000
+            },
+            audio: { maxBitrate: 64000, sampleRate: 44100, channelCount: 1 }
+        },
+
+        // 9:16 Medium Quality Presets
+        medium_9x16_xl: {
+            video: {
+                width: { ideal: 1080 },
+                height: { ideal: 1920 },
+                frameRate: { ideal: 24 },
+                maxBitrate: 2_000_000
+            },
+            audio: { maxBitrate: 96000, sampleRate: 48000, channelCount: 1 }
+        },
+        medium_9x16_lg: {
+            video: {
+                width: { ideal: 720 },
+                height: { ideal: 1280 },
+                frameRate: { ideal: 24 },
+                maxBitrate: 1_200_000
+            },
+            audio: { maxBitrate: 64000, sampleRate: 44100, channelCount: 1 }
+        },
+        medium_9x16_md: {
+            video: {
+                width: { ideal: 480 },
+                height: { ideal: 854 },
+                frameRate: { ideal: 20 },
+                maxBitrate: 600_000
+            },
+            audio: { maxBitrate: 48000, sampleRate: 44100, channelCount: 1 }
+        },
+        medium_9x16_sm: {
+            video: {
+                width: { ideal: 360 },
+                height: { ideal: 640 },
+                frameRate: { ideal: 20 },
+                maxBitrate: 400_000
+            },
+            audio: { maxBitrate: 48000, sampleRate: 44100, channelCount: 1 }
+        },
+        medium_9x16_xs: {
+            video: {
+                width: { ideal: 270 },
+                height: { ideal: 480 },
+                frameRate: { ideal: 20 },
+                maxBitrate: 300_000
+            },
+            audio: { maxBitrate: 48000, sampleRate: 44100, channelCount: 1 }
+        },
+
+        // 9:16 Low Quality Presets
+        low_9x16_xl: {
+            video: {
+                width: { ideal: 1080 },
+                height: { ideal: 1920 },
+                frameRate: { ideal: 15 },
+                maxBitrate: 1_500_000
+            },
+            audio: { maxBitrate: 48000, sampleRate: 44100, channelCount: 1 }
+        },
+        low_9x16_lg: {
+            video: {
+                width: { ideal: 720 },
+                height: { ideal: 1280 },
+                frameRate: { ideal: 15 },
+                maxBitrate: 800_000
+            },
+            audio: { maxBitrate: 32000, sampleRate: 44100, channelCount: 1 }
+        },
+        low_9x16_md: {
+            video: {
+                width: { ideal: 480 },
+                height: { ideal: 854 },
+                frameRate: { ideal: 12 },
+                maxBitrate: 400_000
+            },
+            audio: { maxBitrate: 32000, sampleRate: 22050, channelCount: 1 }
+        },
+        low_9x16_sm: {
+            video: {
+                width: { ideal: 360 },
+                height: { ideal: 640 },
+                frameRate: { ideal: 10 },
+                maxBitrate: 250_000
+            },
+            audio: { maxBitrate: 24000, sampleRate: 22050, channelCount: 1 }
+        },
+        low_9x16_xs: {
+            video: {
+                width: { ideal: 270 },
+                height: { ideal: 480 },
+                frameRate: { ideal: 10 },
+                maxBitrate: 150_000
+            },
+            audio: { maxBitrate: 24000, sampleRate: 22050, channelCount: 1 }
         }
     };
 }
