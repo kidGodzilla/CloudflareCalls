@@ -1340,7 +1340,7 @@ class CloudflareCalls {
      */
     async getSessionState() {
         if (!this.sessionId) {
-            throw new Error('No active session');
+            return this._warn('No active session');
         }
 
         try {
