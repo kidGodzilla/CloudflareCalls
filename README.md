@@ -60,4 +60,5 @@ You can see an example of this flow in the example included at `public/index.htm
 - ~~Participant list (text list) does not update properly~~
 - ~~Screen sharing does not work~~
 - Cannot publish tracks after unpublishing tracks
+- Leave existing room when clicking Join Room button in room list
 - More..
