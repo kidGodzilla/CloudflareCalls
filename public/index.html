@@ -422,6 +422,12 @@
             console.log('Skipping invalid track:', track);
             return;
         }
+
+        // Skip our own track
+        if (track.sessionId === calls.sessionId) {
+            console.log('Skipping our own track');
+            return;
+        }
         
         // Update participant list when tracks change
         updateParticipantList();
